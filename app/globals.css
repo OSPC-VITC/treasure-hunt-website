@@ -24,3 +24,266 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.mono-font {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-weight: 400;
+}
+        
+        .crt-scanlines {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: repeating-linear-gradient(
+            0deg,
+            transparent 0px,
+            transparent 4px,
+            rgba(0, 255, 0, 0.3) 4px,
+            rgba(0, 255, 0, 0.3) 5px,
+            transparent 5px,
+            transparent 9px
+          );
+          animation: crt-scanlines-move 0.5s linear infinite;
+          pointer-events: none;
+          z-index: 100;
+        }
+        
+        @keyframes crt-scanlines-move {
+          0% { transform: translateY(0px); }
+          100% { transform: translateY(9px); }
+        }
+        
+        .crt-background {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: 
+            radial-gradient(ellipse at center, rgba(0, 255, 0, 0.02) 0%, transparent 70%),
+            linear-gradient(135deg, rgba(0, 255, 0, 0.01) 0%, transparent 100%);
+          animation: crt-drift 20s ease-in-out infinite;
+          z-index: 1;
+        }
+        
+        .crt-static {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='staticNoise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23staticNoise)' opacity='0.01'/%3E%3C/svg%3E");
+          animation: crt-static 0.1s steps(20) infinite;
+          z-index: 2;
+        }
+        
+        .crt-flicker {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 255, 0, 0.002);
+          animation: crt-flicker 0.15s ease-in-out infinite alternate;
+          z-index: 3;
+        }
+        
+        .crt-vignette {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: radial-gradient(
+            ellipse at center,
+            transparent 0%,
+            transparent 75%,
+            rgba(0, 0, 0, 0.1) 90%,
+            rgba(0, 0, 0, 0.3) 100%
+          );
+          z-index: 4;
+        }
+        
+        @keyframes crt-drift {
+          0%, 100% { transform: translateX(0px) translateY(0px); }
+          25% { transform: translateX(0.5px) translateY(-0.3px); }
+          50% { transform: translateX(-0.3px) translateY(0.5px); }
+          75% { transform: translateX(0.3px) translateY(0.3px); }
+        }
+        
+        @keyframes crt-static {
+          0% { transform: translateX(0px) translateY(0px); }
+          10% { transform: translateX(-1px) translateY(-1px); }
+          20% { transform: translateX(1px) translateY(0px); }
+          30% { transform: translateX(0px) translateY(1px); }
+          40% { transform: translateX(-1px) translateY(0px); }
+          50% { transform: translateX(1px) translateY(-1px); }
+          60% { transform: translateX(0px) translateY(0px); }
+          70% { transform: translateX(-1px) translateY(1px); }
+          80% { transform: translateX(1px) translateY(0px); }
+          90% { transform: translateX(0px) translateY(-1px); }
+          100% { transform: translateX(-1px) translateY(0px); }
+        }
+        
+        @keyframes crt-flicker {
+          0% { opacity: 1; }
+          97% { opacity: 1; }
+          98% { opacity: 0.98; }
+          99% { opacity: 0.99; }
+          100% { opacity: 1; }
+        }
+        
+        @media (max-width: 768px) {
+          .crt-scanlines {
+            background: repeating-linear-gradient(
+              0deg,
+              transparent 0px,
+              transparent 6px,
+              rgba(0, 255, 0, 0.25) 6px,
+              rgba(0, 255, 0, 0.25) 7px,
+              transparent 7px,
+              transparent 13px
+            );
+            animation: crt-scanlines-move 0.7s linear infinite;
+          }
+          
+          @keyframes crt-scanlines-move {
+            0% { transform: translateY(0px); }
+            100% { transform: translateY(13px); }
+          }
+        }
+        
+        .glitch-text {
+          position: relative;
+          display: inline-block;
+        }
+        
+        .glitch-active::before,
+        .glitch-active::after {
+          content: attr(data-text);
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          opacity: 0.8;
+        }
+        
+        .glitch-active::before {
+          animation: glitch1 0.2s ease-out;
+          color: #ff0080;
+          z-index: -1;
+        }
+        
+        .glitch-active::after {
+          animation: glitch2 0.2s ease-out;
+          color: #00ff80;
+          z-index: -2;
+        }
+        
+        @keyframes glitch1 {
+          0%, 100% { transform: translate(0); }
+          20% { transform: translate(-1px, 1px); }
+          40% { transform: translate(-1px, -1px); }
+          60% { transform: translate(1px, 1px); }
+          80% { transform: translate(1px, -1px); }
+        }
+        
+        @keyframes glitch2 {
+          0%, 100% { transform: translate(0); }
+          20% { transform: translate(1px, -1px); }
+          40% { transform: translate(1px, 1px); }
+          60% { transform: translate(-1px, -1px); }
+          80% { transform: translate(-1px, 1px); }
+        }
+        
+        .subtle-glow {
+          text-shadow: 
+            0 0 5px currentColor,
+            0 0 10px currentColor;
+        }
+        
+        .grid-bg {
+          background-image: 
+            linear-gradient(rgba(0, 255, 0, 0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 255, 0, 0.03) 1px, transparent 1px);
+          background-size: 40px 40px;
+          animation: grid-move 30s linear infinite;
+        }
+        
+        @keyframes grid-move {
+          0% { background-position: 0 0; }
+          100% { background-position: 40px 40px; }
+        }
+        
+        .cursor-blink {
+          animation: blink 1.2s infinite;
+        }
+        
+        @keyframes blink {
+          0%, 50% { opacity: 1; }
+          51%, 100% { opacity: 0; }
+        }
+        
+        .fade-in {
+          animation: fadeIn 0.8s ease-out;
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .button-glow {
+          transition: all 0.3s ease;
+          border: 1px solid #00ff00;
+          box-shadow: 
+            0 0 10px rgba(0, 255, 0, 0.3),
+            inset 0 0 10px rgba(0, 255, 0, 0.1);
+        }
+        
+        .button-glow:hover {
+          border-color: #00ff00;
+          box-shadow: 
+            0 0 20px rgba(0, 255, 0, 0.5),
+            inset 0 0 20px rgba(0, 255, 0, 0.2);
+          transform: translateY(-2px);
+        }
+        
+        .vhs-filter {
+          filter: contrast(1.1) saturate(1.2) brightness(0.95);
+        }
+
+        .crt-effect::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: repeating-linear-gradient(
+            to right,
+            rgba(0, 255, 0, 0.01),
+            rgba(0, 255, 0, 0.01) 2px
+          );
+          mix-blend-mode: color-dodge;
+          animation: rgb-drift 6s ease-in-out infinite;
+          pointer-events: none;
+          z-index: 1000;
+        }
+
+        @keyframes rgb-drift {
+          0%, 100% { transform: translateX(0); }
+          50% { transform: translateX(1px); }
+        }
+
+        .screen-warp {
+          transform: scale(1.01);
+          border-radius: 6px;
+          overflow: hidden;
+          box-shadow: 
+            inset 0 0 100px rgba(0, 255, 0, 0.07),
+            inset 0 0 30px rgba(0, 255, 0, 0.12),
+            0 0 20px rgba(0, 255, 0, 0.15);
+          backdrop-filter: blur(0.2px);
+          filter: drop-shadow(0 0 3px rgba(0, 255, 0, 0.1));
+        }
