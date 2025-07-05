@@ -27,21 +27,48 @@ export default function Home() {
     "READY TO EXECUTE"
   ];
 
-  // Check what permissions need to be requested
-  const checkPermissionAvailability = async () => {
+  // Check existing permissions status
+  const checkExistingPermissions = async () => {
     const needsPermissions = [];
 
-    // Always assume we need to request permissions initially
-    if (navigator.geolocation) {
-      setLocationStatus('prompt');
-      needsPermissions.push('location');
+    // Check location permission status
+    if (navigator.permissions && navigator.geolocation) {
+      try {
+        const locationPermission = await navigator.permissions.query({ name: 'geolocation' });
+        if (locationPermission.state === 'granted') {
+          setLocationStatus('granted');
+        } else if (locationPermission.state === 'denied') {
+          setLocationStatus('denied');
+        } else {
+          setLocationStatus('prompt');
+          needsPermissions.push('location');
+        }
+      } catch (error) {
+        // Fallback for browsers that don't support permissions API
+        setLocationStatus('prompt');
+        needsPermissions.push('location');
+      }
     } else {
       setLocationStatus('denied');
     }
 
-    if (navigator.mediaDevices && await navigator.mediaDevices.getUserMedia()) {
-      setCameraStatus('prompt');
-      needsPermissions.push('camera');
+    // Check camera permission status
+    if (navigator.permissions && navigator.mediaDevices) {
+      try {
+        const cameraPermission = await navigator.permissions.query({ name: 'camera' as PermissionName });
+        if (cameraPermission.state === 'granted') {
+          setCameraStatus('granted');
+        } else if (cameraPermission.state === 'denied') {
+          setCameraStatus('denied');
+        } else {
+          setCameraStatus('prompt');
+          needsPermissions.push('camera');
+        }
+      } catch (error) {
+        // Fallback for browsers that don't support camera permission query
+        setCameraStatus('prompt');
+        needsPermissions.push('camera');
+      }
     } else {
       setCameraStatus('denied');
     }
@@ -53,86 +80,128 @@ export default function Home() {
     if (needsPermissions.length > 0) {
       setPendingPermissions(needsPermissions);
       setShowPermissionPrompt(true);
-      return false; // Don't continue with system checks yet
+      return false;
     }
 
-    return true; // No permissions needed, continue
+    return true;
   };
 
-  // Request location permission
+  // Request location permission with better error handling
   const requestLocationPermission = async () => {
     return new Promise((resolve) => {
       if (!navigator.geolocation) {
+        console.log('Geolocation not supported');
         setLocationStatus('denied');
         resolve(false);
         return;
       }
 
+      // Use getCurrentPosition to trigger permission prompt
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          console.log('Location acquired:', position.coords.latitude, position.coords.longitude);
+          console.log('Location permission granted:', position.coords.latitude, position.coords.longitude);
           setLocationStatus('granted');
           resolve(true);
         },
         (error) => {
-          console.warn('Location access denied:', error);
-          setLocationStatus('denied');
+          console.log('Location permission error:', error.code, error.message);
+          switch (error.code) {
+            case error.PERMISSION_DENIED:
+              setLocationStatus('denied');
+              break;
+            case error.POSITION_UNAVAILABLE:
+              setLocationStatus('denied');
+              break;
+            case error.TIMEOUT:
+              setLocationStatus('denied');
+              break;
+            default:
+              setLocationStatus('denied');
+              break;
+          }
           resolve(false);
         },
         {
           timeout: 10000,
-          enableHighAccuracy: true
+          enableHighAccuracy: false, // Set to false for faster response
+          maximumAge: 300000 // 5 minutes cache
         }
       );
     });
   };
 
-  // Request camera permission
+  // Request camera permission with better error handling
   const requestCameraPermission = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.log('Camera not supported');
+      setCameraStatus('denied');
+      return false;
+    }
+
     try {
+      // Request camera access - this will trigger the permission prompt
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        } 
       });
       
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack && videoTrack.readyState === 'live') {
-        console.log('Camera access granted and working');
-        setCameraStatus('granted');
-        
-        // Stop the stream immediately after testing
-        stream.getTracks().forEach(track => track.stop());
-        return true;
+      console.log('Camera permission granted');
+      setCameraStatus('granted');
+      
+      // Stop the stream immediately after testing
+      stream.getTracks().forEach(track => {
+        track.stop();
+        console.log('Camera stream stopped');
+      });
+      
+      return true;
+    } catch (error) {
+      console.log('Camera permission error:', error);
+      
+      // Handle different types of errors
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'name' in error &&
+        typeof (error as { name: unknown }).name === 'string'
+      ) {
+        const errorName = (error as { name: string }).name;
+        if (errorName === 'NotAllowedError') {
+          setCameraStatus('denied');
+        } else if (errorName === 'NotFoundError') {
+          setCameraStatus('denied');
+        } else if (errorName === 'NotSupportedError') {
+          setCameraStatus('denied');
+        } else {
+          setCameraStatus('denied');
+        }
       } else {
         setCameraStatus('denied');
-        return false;
       }
-    } catch (error) {
-      console.warn('Camera access denied:', error);
-      setCameraStatus('denied');
+      
       return false;
     }
   };
 
-  // Handle permission requests
+  // Handle permission requests with better flow
   const handlePermissionRequest = async () => {
     playBeep(800, 100);
     setShowPermissionPrompt(false);
     
-    // Set status to checking while we request
+    // Request permissions sequentially with status updates
     if (pendingPermissions.includes('location')) {
+      console.log('Requesting location permission...');
       setLocationStatus('checking');
-    }
-    if (pendingPermissions.includes('camera')) {
-      setCameraStatus('checking');
-    }
-
-    // Request permissions sequentially
-    if (pendingPermissions.includes('location')) {
       await requestLocationPermission();
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     if (pendingPermissions.includes('camera')) {
+      console.log('Requesting camera permission...');
+      setCameraStatus('checking');
       await requestCameraPermission();
       await new Promise(resolve => setTimeout(resolve, 500));
     }
@@ -171,7 +240,7 @@ export default function Home() {
     }, 1000);
   };
 
-  // Check network connectivity
+  // Check network connectivity with better error handling
   const checkNetwork = async () => {
     try {
       if (!navigator.onLine) {
@@ -179,25 +248,27 @@ export default function Home() {
         return;
       }
 
-      // Test with a simple fetch
+      // Test with a simple fetch to a reliable endpoint
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
       try {
-        await fetch('https://httpbin.org/status/200', {
+        const response = await fetch('https://www.google.com/favicon.ico', {
           method: 'HEAD',
           mode: 'no-cors',
-          signal: controller.signal
+          signal: controller.signal,
+          cache: 'no-cache'
         });
         clearTimeout(timeoutId);
         setNetworkStatus('online');
         console.log('Network connection verified');
       } catch (fetchError) {
         clearTimeout(timeoutId);
+        console.log('Network check failed:', fetchError);
         setNetworkStatus('offline');
       }
     } catch (error) {
-      console.warn('Network check failed:', error);
+      console.log('Network check error:', error);
       setNetworkStatus('offline');
     }
   };
@@ -206,10 +277,10 @@ export default function Home() {
   const runSystemChecks = async () => {
     setSystemChecking(true);
     
-    // Check what permissions are available and show prompt if needed
-    const allAvailable = checkPermissionAvailability();
+    // Check existing permissions first
+    const allAvailable = await checkExistingPermissions();
     
-    if (await allAvailable) {
+    if (allAvailable) {
       // If no permissions needed, continue directly
       await checkNetwork();
       setTimeout(() => {
@@ -224,33 +295,43 @@ export default function Home() {
   const startExperience = async () => {
     if (audioInitialized) return;
     
-    const ctx = new ((window.AudioContext || (window as any).webkitAudioContext))();
-    setAudioContext(ctx);
-    
-    // Initialize background music
-    if (!backgroundMusicRef.current) {
-      backgroundMusicRef.current = new Audio('/audio/background-music.mp3');
-      backgroundMusicRef.current.loop = true;
-      backgroundMusicRef.current.volume = 0.3;
+    try {
+      const ctx = new ((window.AudioContext || (window as any).webkitAudioContext))();
+      setAudioContext(ctx);
       
-      backgroundMusicRef.current.addEventListener('canplaythrough', () => {
-        console.log('Background music loaded successfully');
-      });
+      // Initialize background music
+      if (!backgroundMusicRef.current) {
+        backgroundMusicRef.current = new Audio('/audio/background-music.mp3');
+        backgroundMusicRef.current.loop = true;
+        backgroundMusicRef.current.volume = 0.3;
+        
+        backgroundMusicRef.current.addEventListener('canplaythrough', () => {
+          console.log('Background music loaded successfully');
+        });
+        
+        backgroundMusicRef.current.addEventListener('error', (e) => {
+          console.warn('Background music failed to load:', e);
+        });
+        
+        try {
+          await backgroundMusicRef.current.play();
+        } catch (e) {
+          console.warn('Could not play background music:', e);
+        }
+      }
       
-      backgroundMusicRef.current.addEventListener('error', (e) => {
-        console.warn('Background music failed to load:', e);
-      });
+      setAudioInitialized(true);
+      setShowStartPrompt(false);
       
-      backgroundMusicRef.current.play().catch(e => {
-        console.warn('Could not play background music:', e);
-      });
+      // Start system checks
+      await runSystemChecks();
+    } catch (error) {
+      console.error('Audio initialization failed:', error);
+      // Continue without audio
+      setAudioInitialized(true);
+      setShowStartPrompt(false);
+      await runSystemChecks();
     }
-    
-    setAudioInitialized(true);
-    setShowStartPrompt(false);
-    
-    // Start system checks
-    await runSystemChecks();
   };
 
   // Boot sequence effect
@@ -298,43 +379,51 @@ export default function Home() {
   const playBeep = (frequency = 800, duration = 100) => {
     if (!audioContext || !audioInitialized) return;
     
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    
-    oscillator.frequency.value = frequency;
-    oscillator.type = 'square';
-    
-    gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration / 1000);
-    
-    oscillator.start(audioContext.currentTime);
-    oscillator.stop(audioContext.currentTime + duration / 1000);
+    try {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'square';
+      
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration / 1000);
+      
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + duration / 1000);
+    } catch (error) {
+      console.warn('Audio playback failed:', error);
+    }
   };
 
   const playGlitchSound = () => {
     if (!audioContext || !audioInitialized) return;
     
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    const filter = audioContext.createBiquadFilter();
-    
-    oscillator.connect(filter);
-    filter.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    
-    oscillator.frequency.value = 200;
-    oscillator.type = 'sawtooth';
-    filter.type = 'lowpass';
-    filter.frequency.value = 400;
-    
-    gainNode.gain.setValueAtTime(0.05, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
-    
-    oscillator.start(audioContext.currentTime);
-    oscillator.stop(audioContext.currentTime + 0.1);
+    try {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      const filter = audioContext.createBiquadFilter();
+      
+      oscillator.connect(filter);
+      filter.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = 200;
+      oscillator.type = 'sawtooth';
+      filter.type = 'lowpass';
+      filter.frequency.value = 400;
+      
+      gainNode.gain.setValueAtTime(0.05, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
+      
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.1);
+    } catch (error) {
+      console.warn('Glitch sound playback failed:', error);
+    }
   };
 
   const handleEnterClick = () => {
