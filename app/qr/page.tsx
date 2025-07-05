@@ -1,156 +1,229 @@
-"use client";
-import { useEffect, useState, useRef } from 'react';
+'use client';
 
-declare global {
-  interface Window {
-    scanStartTime?: number;
-  }
+import { useEffect, useRef, useState } from 'react';
+import { Html5QrcodeScanner } from 'html5-qrcode';
+import { motion } from 'framer-motion';
+
+interface GPSCoordinates {
+  latitude: number;
+  longitude: number;
 }
 
-export default function QRScanner() {
-  const [glitchActive, setGlitchActive] = useState(false);
-  const [scannedData, setScannedData] = useState('');
-  const [error, setError] = useState('');
+export default function HTML5QRScanner() {
+  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const [data, setData] = useState('No result');
   const [isScanning, setIsScanning] = useState(false);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationRef = useRef<number | null>(null);
+  const [glitchActive, setGlitchActive] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<GPSCoordinates | null>(null);
+  const [locationError, setLocationError] = useState<string>('');
+  const [isCheckingLocation, setIsCheckingLocation] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<'idle' | 'getting' | 'success' | 'error'>('idle');
 
   // Glitch effect
   useEffect(() => {
     const glitchTimer = setInterval(() => {
       setGlitchActive(true);
       setTimeout(() => setGlitchActive(false), 150);
-    }, 8000);
+    }, 6000);
 
     return () => clearInterval(glitchTimer);
   }, []);
 
-  // QR Code detection function
-  const detectQRCode = () => {
-    if (!videoRef.current || !canvasRef.current) return;
-
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-
-    if (video.readyState === video.HAVE_ENOUGH_DATA && ctx) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      
-      try {
-        // Simple QR detection simulation - in a real app you'd use a QR library
-        // For demo purposes, we'll simulate finding a QR code after 3 seconds
-        const scanTime = Date.now() - (window.scanStartTime || 0);
-        if (scanTime > 3000 && Math.random() > 0.7) {
-          const demoData = `https://example.com/qr-demo-${Math.floor(Math.random() * 1000)}`;
-          setScannedData(demoData);
-          setIsScanning(false);
-          stopScanner();
-          return;
-        }
-      } catch (err) {
-        console.error('QR detection error:', err);
+  // Get current location
+  const getCurrentLocation = (): Promise<GPSCoordinates> => {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation is not supported by this browser'));
+        return;
       }
-    }
 
-    if (isScanning) {
-      animationRef.current = requestAnimationFrame(detectQRCode);
-    }
+      setLocationStatus('getting');
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const coords = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          };
+          setCurrentLocation(coords);
+          setLocationStatus('success');
+          resolve(coords);
+        },
+        (error) => {
+          let errorMessage = 'Unable to retrieve location';
+          switch (error.code) {
+            case error.PERMISSION_DENIED:
+              errorMessage = 'Location access denied by user';
+              break;
+            case error.POSITION_UNAVAILABLE:
+              errorMessage = 'Location information unavailable';
+              break;
+            case error.TIMEOUT:
+              errorMessage = 'Location request timed out';
+              break;
+          }
+          setLocationError(errorMessage);
+          setLocationStatus('error');
+          reject(new Error(errorMessage));
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 60000
+        }
+      );
+    });
   };
 
-  const startScanner = async () => {
-    setError('');
-    setScannedData('');
-    setIsScanning(true);
-    window.scanStartTime = Date.now();
-    
-    try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280, min: 640 },
-          height: { ideal: 720, min: 480 }
-        }
-      });
+  // Calculate distance between two coordinates (Haversine formula)
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371; // Earth's radius in kilometers
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c * 1000; // Convert to meters
+  };
 
-      setStream(mediaStream);
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-        videoRef.current.onloadedmetadata = () => {
-          if (videoRef.current) {
-            videoRef.current.play();
-          }
-          detectQRCode();
+  // Parse QR code data to extract URL and coordinates
+  const parseQRData = (qrData: string) => {
+    try {
+      // Try to parse as JSON first
+      const parsed = JSON.parse(qrData);
+      if (parsed.url && parsed.latitude && parsed.longitude) {
+        return {
+          url: parsed.url,
+          latitude: parseFloat(parsed.latitude),
+          longitude: parseFloat(parsed.longitude),
+          tolerance: parsed.tolerance || 100 // Default 100 meters tolerance
         };
       }
-    } catch (err) {
-      if (err && typeof err === 'object' && 'message' in err && typeof (err as any).message === 'string') {
-        setError((err as { message: string }).message);
-      } else {
-        setError('Failed to access camera');
+    } catch (e) {
+      // If not JSON, try to parse as URL with coordinates in query params
+      try {
+        const url = new URL(qrData);
+        const lat = url.searchParams.get('lat');
+        const lng = url.searchParams.get('lng');
+        const tolerance = url.searchParams.get('tolerance');
+        
+        if (lat && lng) {
+          return {
+            url: qrData,
+            latitude: parseFloat(lat),
+            longitude: parseFloat(lng),
+            tolerance: tolerance ? parseFloat(tolerance) : 100
+          };
+        }
+      } catch (e) {
+        // If it's just a regular URL, return it without coordinates
+        if (qrData.startsWith('http://') || qrData.startsWith('https://')) {
+          return { url: qrData, latitude: null, longitude: null, tolerance: null };
+        }
       }
-      setIsScanning(false);
     }
+    return null;
   };
 
-  const stopScanner = () => {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
-    }
+  // Handle location-based URL navigation
+  const handleLocationBasedNavigation = async (qrData: string) => {
+    const parsedData = parseQRData(qrData);
     
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
+    if (!parsedData) {
+      setData(`Invalid QR format: ${qrData}`);
+      return;
     }
-    
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    
-    setIsScanning(false);
-  };
 
-  const resetScanner = () => {
-    stopScanner();
-    setScannedData('');
-    setError('');
-  };
+    // If no coordinates in QR, just navigate to URL
+    if (parsedData.latitude === null || parsedData.longitude === null) {
+      setData(`Navigating to: ${parsedData.url}`);
+      window.open(parsedData.url, '_blank');
+      return;
+    }
 
-  const copyToClipboard = async (text: string) => {
+    setIsCheckingLocation(true);
+    
     try {
-      await navigator.clipboard.writeText(text);
-    } catch (err) {
-      // Fallback for older browsers
-      const textArea = document.createElement('textarea');
-      textArea.value = text;
-      textArea.style.position = 'fixed';
-      textArea.style.opacity = '0';
-      textArea.style.left = '-9999px';
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textArea);
+      const currentPos = await getCurrentLocation();
+      const distance = calculateDistance(
+        currentPos.latitude,
+        currentPos.longitude,
+        parsedData.latitude,
+        parsedData.longitude
+      );
+
+      if (distance <= parsedData.tolerance!) {
+        setData(`✅ Location verified! Distance: ${Math.round(distance)}m. Navigating to: ${parsedData.url}`);
+        // Navigate to the URL
+        setTimeout(() => {
+          window.open(parsedData.url, '_blank');
+        }, 1000);
+      } else {
+        setData(`❌ Location mismatch! You are ${Math.round(distance)}m away. Required within ${parsedData.tolerance}m of target location.`);
+      }
+    } catch (error) {
+      setData(`Location error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsCheckingLocation(false);
     }
   };
 
-  // Cleanup on unmount
   useEffect(() => {
+    const config = {
+      fps: 10,
+      qrbox: { width: 250, height: 250 },
+      aspectRatio: 1.0,
+    };
+
+    const scanner = new Html5QrcodeScanner('qr-reader', config, false);
+    scannerRef.current = scanner;
+
+    const onScanSuccess = (decodedText: string) => {
+      console.log('QR Code scanned:', decodedText);
+      
+      // Stop scanning
+      scanner.clear();
+      setIsScanning(false);
+      
+      // Handle location-based navigation
+      handleLocationBasedNavigation(decodedText);
+    };
+
+    const onScanError = (errorMessage: string) => {
+      // Handle scan error - usually just means no QR code in view
+      console.log('Scan error:', errorMessage);
+    };
+
+    scanner.render(onScanSuccess, onScanError);
+    setIsScanning(true);
+
     return () => {
-      stopScanner();
+      if (scannerRef.current) {
+        scannerRef.current.clear().catch(console.error);
+      }
     };
   }, []);
+
+  const restartScanner = () => {
+    window.location.reload();
+  };
+
+  const getLocationManually = async () => {
+    try {
+      await getCurrentLocation();
+    } catch (error) {
+      console.error('Failed to get location:', error);
+    }
+  };
 
   return (
     <>
       <style jsx global>{`
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
+        
         .mono-font {
-          font-family: 'Courier New', monospace;
+          font-family: 'JetBrains Mono', 'Courier New', monospace;
         }
         
         .crt-background {
@@ -304,6 +377,42 @@ export default function QRScanner() {
           cursor: not-allowed;
         }
         
+        .scanner-container {
+          background: rgba(0, 0, 0, 0.8);
+          border: 1px solid rgba(0, 255, 150, 0.3);
+          border-radius: 8px;
+          overflow: hidden;
+          position: relative;
+        }
+        
+        .scanner-container::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: linear-gradient(45deg, transparent 49%, rgba(0, 255, 150, 0.1) 50%, transparent 51%);
+          pointer-events: none;
+          z-index: 1;
+        }
+        
+        .result-container {
+          background: rgba(0, 0, 0, 0.8);
+          border: 1px solid rgba(0, 255, 150, 0.3);
+          color: white;
+        }
+        
+        .location-container {
+          background: rgba(0, 0, 0, 0.8);
+          border: 1px solid rgba(255, 165, 0, 0.3);
+          color: white;
+        }
+        
+        .subtle-glow {
+          text-shadow: 0 0 10px currentColor;
+        }
+        
         .vhs-filter {
           filter: contrast(1.2) brightness(1.1) saturate(1.3);
         }
@@ -321,112 +430,35 @@ export default function QRScanner() {
           100% { content: ''; }
         }
         
-        .video-container {
-          position: relative;
-          width: 320px;
-          height: 320px;
-          background: #000;
-          border-radius: 8px;
-          overflow: hidden;
-          margin: 0 auto;
-          border: 1px solid rgba(0, 255, 150, 0.3);
-        }
-
-        .video-element {
-          display: block !important;
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100% !important;
-          height: 100% !important;
-          object-fit: cover;
-          background: #000;
-          border-radius: 8px;
-          z-index: 1;
+        /* Override html5-qrcode styles */
+        #qr-reader {
+          border: none !important;
         }
         
-        .scanner-overlay {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          transform: translate(-50%, -50%);
-          width: 250px;
-          height: 250px;
-          border: 2px solid #00ff96;
-          border-radius: 12px;
-          background: transparent;
-          pointer-events: none;
-          z-index: 10;
+        #qr-reader__dashboard_section {
+          background: rgba(0, 0, 0, 0.8) !important;
+          border: 1px solid rgba(0, 255, 150, 0.3) !important;
+          border-radius: 8px !important;
+          color: white !important;
         }
         
-        .scanner-overlay::before {
-          content: '';
-          position: absolute;
-          top: -2px;
-          left: -2px;
-          right: -2px;
-          bottom: -2px;
-          background: linear-gradient(45deg, transparent, rgba(0, 255, 150, 0.3), transparent);
-          border-radius: 12px;
-          animation: scanner-pulse 2s ease-in-out infinite;
-          z-index: -1;
+        #qr-reader__dashboard_section button {
+          background: transparent !important;
+          border: 1px solid rgba(0, 255, 150, 0.5) !important;
+          color: #00ff96 !important;
+          font-family: 'JetBrains Mono', monospace !important;
+          text-transform: uppercase !important;
+          letter-spacing: 1px !important;
+          transition: all 0.3s ease !important;
         }
         
-        @keyframes scanner-pulse {
-          0%, 100% { opacity: 0.3; }
-          50% { opacity: 0.8; }
+        #qr-reader__dashboard_section button:hover {
+          background: rgba(0, 255, 150, 0.1) !important;
+          box-shadow: 0 0 10px rgba(0, 255, 150, 0.3) !important;
         }
         
-        .scanner-line {
-          position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          height: 2px;
-          background: linear-gradient(90deg, transparent, #00ff96, transparent);
-          animation: scanner-sweep 2s ease-in-out infinite;
-          z-index: 11;
-        }
-        
-        @keyframes scanner-sweep {
-          0% { transform: translateY(0); }
-          100% { transform: translateY(246px); }
-        }
-        
-        .corner-frame {
-          position: absolute;
-          width: 30px;
-          height: 30px;
-          border: 2px solid #00ff96;
-          z-index: 12;
-        }
-        
-        .corner-frame.top-left {
-          top: -2px;
-          left: -2px;
-          border-right: none;
-          border-bottom: none;
-        }
-        
-        .corner-frame.top-right {
-          top: -2px;
-          right: -2px;
-          border-left: none;
-          border-bottom: none;
-        }
-        
-        .corner-frame.bottom-left {
-          bottom: -2px;
-          left: -2px;
-          border-right: none;
-          border-top: none;
-        }
-        
-        .corner-frame.bottom-right {
-          bottom: -2px;
-          right: -2px;
-          border-left: none;
-          border-top: none;
+        #qr-reader__scan_region {
+          border: 2px solid rgba(0, 255, 150, 0.5) !important;
         }
       `}</style>
       
@@ -439,185 +471,202 @@ export default function QRScanner() {
         <div className="crt-scanlines"></div>
         <div className="grid-bg absolute inset-0 opacity-20"></div>
 
-        <div className="screen-warp relative z-10 flex flex-col justify-center items-center min-h-screen px-6">
-          <div className="text-center max-w-2xl mx-auto w-full">
+        <div className="screen-warp relative z-10 flex flex-col justify-center items-center min-h-screen px-6 py-8">
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 1, ease: "easeOut" }}
+            className="text-center max-w-2xl mx-auto w-full"
+          >
             {/* Header */}
             <div className="mb-8">
-              <h1 className="text-4xl sm:text-5xl font-light mb-4 leading-tight">
+              <motion.h1
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.8, delay: 0.3 }}
+                className="text-4xl sm:text-5xl font-light mb-4 leading-tight"
+              >
                 <span 
-                  className={`glitch-text text-cyan-300 ${glitchActive ? 'glitch-active' : ''}`}
-                  data-text="QR_SCANNER"
+                  className={`glitch-text text-indigo-300 ${glitchActive ? 'glitch-active' : ''}`}
+                  data-text="GPS_QR_SCANNER"
                 >
-                  QR_SCANNER
+                  GPS_QR_SCANNER
                 </span>
-              </h1>
+              </motion.h1>
+              
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.8, delay: 0.6 }}
+                className="text-lg text-cyan-400 font-light subtle-glow mb-6"
+              >
+                LOCATION-VERIFIED ACCESS SYSTEM
+              </motion.div>
             </div>
+
+            {/* Location Status */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 0.8 }}
+              className="mb-6"
+            >
+              <div className="relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-orange-500/20 via-yellow-500/20 to-red-500/20 rounded-lg blur-xl"></div>
+                <div className="relative location-container rounded-lg p-4 max-w-md mx-auto">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-orange-400 text-sm font-light tracking-wide uppercase">
+                      GPS_STATUS:
+                    </h3>
+                    <button
+                      onClick={getLocationManually}
+                      disabled={locationStatus === 'getting'}
+                      className="button-glow px-3 py-1 bg-transparent text-orange-300 text-xs font-light tracking-wider uppercase transition-all duration-300 hover:bg-orange-900/20 disabled:opacity-50"
+                    >
+                      {locationStatus === 'getting' ? 'LOCATING...' : 'GET_LOCATION'}
+                    </button>
+                  </div>
+                  
+                  {locationStatus === 'getting' && (
+                    <div className="text-yellow-400 text-xs uppercase tracking-wider">
+                      <span className="inline-block w-2 h-2 bg-yellow-400 rounded-full mr-2 animate-pulse"></span>
+                      <span className="loading-dots">ACQUIRING GPS</span>
+                    </div>
+                  )}
+                  
+                  {locationStatus === 'success' && currentLocation && (
+                    <div className="text-green-400 text-xs">
+                      <div>LAT: {currentLocation.latitude.toFixed(6)}</div>
+                      <div>LNG: {currentLocation.longitude.toFixed(6)}</div>
+                    </div>
+                  )}
+                  
+                  {locationStatus === 'error' && (
+                    <div className="text-red-400 text-xs">
+                      ERROR: {locationError}
+                    </div>
+                  )}
+                  
+                  {locationStatus === 'idle' && (
+                    <div className="text-gray-400 text-xs uppercase tracking-wider">
+                      LOCATION NOT ACQUIRED
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
             
-            {/* Scanner Interface */}
-            <div className="relative">
-              <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 via-green-500/20 to-indigo-500/20 rounded-lg blur-xl"></div>
-              <div className="relative bg-black/80 backdrop-blur-sm rounded-lg border border-green-400/30 p-8">
-                
-                {/* Error Message */}
-                {error && (
-                  <div className="mb-4 p-3 bg-red-900/20 border border-red-500/30 rounded text-red-400 text-sm">
-                    <div className="font-bold mb-1">SYSTEM ERROR:</div>
-                    <div>{error}</div>
-                  </div>
-                )}
+            {/* Scanner Container */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.8, delay: 0.9 }}
+              className="relative mb-6"
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/20 via-cyan-500/20 to-green-500/20 rounded-lg blur-xl"></div>
+              <div className="relative scanner-container p-4">
+                <div 
+                  id="qr-reader" 
+                  className="w-full max-w-md mx-auto"
+                ></div>
+              </div>
+            </motion.div>
 
-                {/* Scanner Area */}
-                {!stream && !scannedData && (
-                  <div className="mb-6">
-                    <div className="relative w-64 h-64 mx-auto mb-6 border-2 border-dashed border-green-400/30 rounded-lg flex items-center justify-center">
-                      <div className="text-green-400/50 text-6xl">
-                        <svg className="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h4M4 4h4m0 0v4m0 0h4m0 0V4m-4 16v-4m0 0h4m0 0v4M4 20h4m0 0v-4m0 0h4m0 0v4" />
-                        </svg>
-                      </div>
-                      <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-green-400/10 to-cyan-400/10 opacity-50"></div>
-                    </div>
-                    
-                    <button
-                      onClick={startScanner}
-                      disabled={isScanning}
-                      className="w-full button-glow px-6 py-3 bg-transparent text-green-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-green-900/20 disabled:opacity-50"
-                    >
-                      {isScanning ? (
-                        <span className="loading-dots">INITIALIZING SCANNER</span>
-                      ) : (
-                        'ACTIVATE SCANNER'
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* Active Scanner */}
-                {stream && (
-                  <div className="mb-6">
-                    <div className="video-container">
-                      <video
-                        ref={videoRef}
-                        className="video-element"
-                        autoPlay
-                        playsInline
-                        muted
-                        style={{
-                          display: 'block',
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'cover'
-                        }}
-                      />
-                      
-                      <div className="scanner-overlay">
-                        <div className="scanner-line"></div>
-                        <div className="corner-frame top-left"></div>
-                        <div className="corner-frame top-right"></div>
-                        <div className="corner-frame bottom-left"></div>
-                        <div className="corner-frame bottom-right"></div>
-                      </div>
-                    </div>
-                    
-                    <div className="text-center mb-4 mt-4">
-                      <div className="text-green-400 text-sm font-light mb-2">
-                        SCANNING FOR QR CODES...
-                      </div>
-                      <div className="text-cyan-400 text-xs opacity-70">
-                        Position QR code within the frame
-                      </div>
-                    </div>
-                    
-                    <button
-                      onClick={stopScanner}
-                      className="w-full button-glow px-6 py-3 bg-transparent text-red-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-red-900/20"
-                    >
-                      TERMINATE SCAN
-                    </button>
-                  </div>
-                )}
-
-                {/* Scanned Data */}
-                {scannedData && (
-                  <div className="mb-6">
-                    <div className="text-center mb-4">
-                      <div className="text-green-400 text-lg font-light mb-2">
-                        SCAN COMPLETE
-                      </div>
-                      <div className="text-cyan-400 text-sm opacity-70 mb-4">
-                        Data acquired successfully
-                      </div>
-                    </div>
-                    
-                    <div className="bg-black/60 border border-green-400/30 rounded p-4 mb-4">
-                      <div className="text-green-400 text-xs font-light mb-2 tracking-wide uppercase">
-                        Decoded Data:
-                      </div>
-                      <div className="text-white text-sm font-mono break-all">
-                        {scannedData}
-                      </div>
-                    </div>
-                    
-                    <div className="flex space-x-4">
-                      <button
-                        onClick={() => copyToClipboard(scannedData)}
-                        className="flex-1 button-glow px-4 py-2 bg-transparent text-indigo-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-indigo-900/20"
-                      >
-                        COPY DATA
-                      </button>
-                      <button
-                        onClick={resetScanner}
-                        className="flex-1 button-glow px-4 py-2 bg-transparent text-cyan-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-cyan-900/20"
-                      >
-                        NEW SCAN
-                      </button>
-                    </div>
+            {/* Controls */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.8, delay: 1.2 }}
+              className="mb-6"
+            >
+              <button
+                onClick={restartScanner}
+                className="button-glow px-6 py-3 bg-transparent text-indigo-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-indigo-900/20"
+              >
+                RESTART_SCANNER
+              </button>
+            </motion.div>
+            
+            {/* Results */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8, delay: 1.5 }}
+              className="relative"
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-green-500/20 via-cyan-500/20 to-indigo-500/20 rounded-lg blur-xl"></div>
+              <div className="relative result-container rounded-lg p-6 max-w-md mx-auto">
+                <h3 className="text-green-400 text-sm font-light mb-3 tracking-wide uppercase">
+                  SCAN_RESULT:
+                </h3>
+                <p className="text-white font-mono text-sm break-all leading-relaxed">
+                  {data}
+                </p>
+                {(isScanning || isCheckingLocation) && (
+                  <div className="mt-3 text-cyan-400 text-xs uppercase tracking-wider">
+                    <span className="inline-block w-2 h-2 bg-cyan-400 rounded-full mr-2 animate-pulse"></span>
+                    {isCheckingLocation ? 'VERIFYING_LOCATION' : 'SCANNING_ACTIVE'}
                   </div>
                 )}
               </div>
-            </div>
-            
-            {/* Footer */}
-            <div className="mt-8 text-center">
-              <p className="text-gray-500 text-xs font-light tracking-wider">
-                QUANTUM DECRYPTION ENABLED
-              </p>
-            </div>
-          </div>
+            </motion.div>
+
+            {/* QR Format Info */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.8, delay: 1.8 }}
+              className="mt-6 text-xs text-gray-400 max-w-md mx-auto"
+            >
+              <div className="text-center">
+                <p className="mb-2 uppercase tracking-wider">SUPPORTED QR FORMATS:</p>
+                <div className="text-left space-y-1">
+                  <p>• JSON: {"{"}"url":"...", "latitude":..., "longitude":..., "tolerance":...{"}"}</p>
+                  <p>• URL: https://example.com?lat=...&lng=...&tolerance=...</p>
+                  <p>• Regular URL (no location check)</p>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
         </div>
         
         {/* Floating Matrix-style Elements */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          {[...Array(8)].map((_, i) => (
-            <div
+          {[...Array(6)].map((_, i) => (
+            <motion.div
               key={i}
-              className="absolute w-px h-16 bg-gradient-to-b from-transparent via-cyan-400 to-transparent opacity-30"
+              className="absolute w-px h-12 bg-gradient-to-b from-transparent via-green-400 to-transparent opacity-20"
               style={{
-                left: `${10 + i * 12}%`,
+                left: `${15 + i * 15}%`,
                 top: `${Math.random() * 100}%`,
-                animation: `float-${i} ${12 + Math.random() * 6}s infinite ease-in-out`,
-                animationDelay: `${Math.random() * 5}s`
+              }}
+              animate={{
+                y: [0, -150, 0],
+                opacity: [0, 0.4, 0],
+              }}
+              transition={{
+                duration: 10 + Math.random() * 5,
+                repeat: Infinity,
+                delay: Math.random() * 4,
+                ease: "easeInOut",
               }}
             />
           ))}
         </div>
         
         {/* Corner Decorations */}
-        <div className="absolute top-4 left-4 text-cyan-400 opacity-30 text-xs mono-font">
-          SCAN_MODE: {stream ? 'ACTIVE' : 'STANDBY'}
+        <div className="absolute top-4 left-4 text-green-400 opacity-30 text-xs mono-font">
+          GPS_MODE: ACTIVE
         </div>
-        <div className="absolute top-4 right-4 text-green-400 opacity-30 text-xs mono-font">
-          RESOLUTION: HD
+        <div className="absolute top-4 right-4 text-cyan-400 opacity-30 text-xs mono-font">
+          STATUS: READY
         </div>
         <div className="absolute bottom-4 left-4 text-indigo-400 opacity-30 text-xs mono-font">
-          DECODE: REALTIME
+          PROTOCOL: GPS_QR_v2.0
         </div>
         <div className="absolute bottom-4 right-4 text-gray-500 opacity-30 text-xs mono-font">
-          QR_SYS v3.2
+          LOCATION_SYS v1.0
         </div>
-        
-        {/* Hidden canvas for QR processing */}
-        <canvas ref={canvasRef} style={{ display: 'none' }} />
       </div>
     </>
   );
