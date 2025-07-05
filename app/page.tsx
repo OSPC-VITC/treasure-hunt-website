@@ -11,6 +11,13 @@ export default function Home() {
   const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
   const [audioInitialized, setAudioInitialized] = useState(false);
   const [showStartPrompt, setShowStartPrompt] = useState(true);
+  const [systemChecking, setSystemChecking] = useState(false);
+  const [systemChecksDone, setSystemChecksDone] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<'checking' | 'granted' | 'denied' | 'prompt'>('checking');
+  const [cameraStatus, setCameraStatus] = useState<'checking' | 'granted' | 'denied' | 'prompt'>('checking');
+  const [networkStatus, setNetworkStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+  const [showPermissionPrompt, setShowPermissionPrompt] = useState(false);
+  const [pendingPermissions, setPendingPermissions] = useState<string[]>([]);
   const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
 
   const bootSequence = [
@@ -20,8 +27,201 @@ export default function Home() {
     "READY TO EXECUTE"
   ];
 
+  // Check what permissions need to be requested
+  const checkPermissionAvailability = async () => {
+    const needsPermissions = [];
+
+    // Always assume we need to request permissions initially
+    if (navigator.geolocation) {
+      setLocationStatus('prompt');
+      needsPermissions.push('location');
+    } else {
+      setLocationStatus('denied');
+    }
+
+    if (navigator.mediaDevices && await navigator.mediaDevices.getUserMedia()) {
+      setCameraStatus('prompt');
+      needsPermissions.push('camera');
+    } else {
+      setCameraStatus('denied');
+    }
+
+    // Check network immediately
+    setNetworkStatus(navigator.onLine ? 'online' : 'offline');
+
+    // If we have permissions to request, show the prompt
+    if (needsPermissions.length > 0) {
+      setPendingPermissions(needsPermissions);
+      setShowPermissionPrompt(true);
+      return false; // Don't continue with system checks yet
+    }
+
+    return true; // No permissions needed, continue
+  };
+
+  // Request location permission
+  const requestLocationPermission = async () => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        setLocationStatus('denied');
+        resolve(false);
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          console.log('Location acquired:', position.coords.latitude, position.coords.longitude);
+          setLocationStatus('granted');
+          resolve(true);
+        },
+        (error) => {
+          console.warn('Location access denied:', error);
+          setLocationStatus('denied');
+          resolve(false);
+        },
+        {
+          timeout: 10000,
+          enableHighAccuracy: true
+        }
+      );
+    });
+  };
+
+  // Request camera permission
+  const requestCameraPermission = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'environment' } 
+      });
+      
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack && videoTrack.readyState === 'live') {
+        console.log('Camera access granted and working');
+        setCameraStatus('granted');
+        
+        // Stop the stream immediately after testing
+        stream.getTracks().forEach(track => track.stop());
+        return true;
+      } else {
+        setCameraStatus('denied');
+        return false;
+      }
+    } catch (error) {
+      console.warn('Camera access denied:', error);
+      setCameraStatus('denied');
+      return false;
+    }
+  };
+
+  // Handle permission requests
+  const handlePermissionRequest = async () => {
+    playBeep(800, 100);
+    setShowPermissionPrompt(false);
+    
+    // Set status to checking while we request
+    if (pendingPermissions.includes('location')) {
+      setLocationStatus('checking');
+    }
+    if (pendingPermissions.includes('camera')) {
+      setCameraStatus('checking');
+    }
+
+    // Request permissions sequentially
+    if (pendingPermissions.includes('location')) {
+      await requestLocationPermission();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    if (pendingPermissions.includes('camera')) {
+      await requestCameraPermission();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // Check network
+    await checkNetwork();
+
+    setPendingPermissions([]);
+    
+    // Continue with system checks
+    setTimeout(() => {
+      setSystemChecksDone(true);
+      playBeep(1000, 200);
+    }, 1000);
+  };
+
+  // Skip permissions (continue anyway)
+  const handleSkipPermissions = () => {
+    playBeep(600, 100);
+    
+    // Mark pending permissions as denied
+    if (pendingPermissions.includes('location')) {
+      setLocationStatus('denied');
+    }
+    if (pendingPermissions.includes('camera')) {
+      setCameraStatus('denied');
+    }
+
+    setShowPermissionPrompt(false);
+    setPendingPermissions([]);
+    
+    // Continue with system checks
+    setTimeout(() => {
+      setSystemChecksDone(true);
+      playBeep(1000, 200);
+    }, 1000);
+  };
+
+  // Check network connectivity
+  const checkNetwork = async () => {
+    try {
+      if (!navigator.onLine) {
+        setNetworkStatus('offline');
+        return;
+      }
+
+      // Test with a simple fetch
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      try {
+        await fetch('https://httpbin.org/status/200', {
+          method: 'HEAD',
+          mode: 'no-cors',
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        setNetworkStatus('online');
+        console.log('Network connection verified');
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        setNetworkStatus('offline');
+      }
+    } catch (error) {
+      console.warn('Network check failed:', error);
+      setNetworkStatus('offline');
+    }
+  };
+
+  // Run system checks
+  const runSystemChecks = async () => {
+    setSystemChecking(true);
+    
+    // Check what permissions are available and show prompt if needed
+    const allAvailable = checkPermissionAvailability();
+    
+    if (await allAvailable) {
+      // If no permissions needed, continue directly
+      await checkNetwork();
+      setTimeout(() => {
+        setSystemChecksDone(true);
+        playBeep(1000, 200);
+      }, 1000);
+    }
+    // If permissions are needed, the prompt will be shown and handled separately
+  };
+
   // Initialize audio and start the experience
-  const startExperience = () => {
+  const startExperience = async () => {
     if (audioInitialized) return;
     
     const ctx = new ((window.AudioContext || (window as any).webkitAudioContext))();
@@ -41,7 +241,6 @@ export default function Home() {
         console.warn('Background music failed to load:', e);
       });
       
-      // Auto-play background music
       backgroundMusicRef.current.play().catch(e => {
         console.warn('Could not play background music:', e);
       });
@@ -49,10 +248,14 @@ export default function Home() {
     
     setAudioInitialized(true);
     setShowStartPrompt(false);
+    
+    // Start system checks
+    await runSystemChecks();
   };
 
+  // Boot sequence effect
   useEffect(() => {
-    if (!audioInitialized) return;
+    if (!systemChecksDone) return;
     
     const bootTimer = setInterval(() => {
       if (currentLine < bootSequence.length - 1) {
@@ -68,7 +271,7 @@ export default function Home() {
     }, 600);
 
     return () => clearInterval(bootTimer);
-  }, [currentLine, audioInitialized]);
+  }, [currentLine, systemChecksDone]);
 
   useEffect(() => {
     if (!audioInitialized) return;
@@ -136,8 +339,42 @@ export default function Home() {
 
   const handleEnterClick = () => {
     playBeep(1000, 150);
-    // Add your navigation logic here
     console.log("Entering the treasure hunt...");
+    console.log("System Status:", {
+      location: locationStatus,
+      camera: cameraStatus,
+      network: networkStatus
+    });
+  };
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'granted':
+      case 'online':
+        return '✓';
+      case 'denied':
+      case 'offline':
+        return '✗';
+      case 'prompt':
+        return '?';
+      default:
+        return '...';
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'granted':
+      case 'online':
+        return 'text-green-400';
+      case 'denied':
+      case 'offline':
+        return 'text-red-400';
+      case 'prompt':
+        return 'text-yellow-400';
+      default:
+        return 'text-yellow-400';
+    }
   };
 
   return (
@@ -147,6 +384,7 @@ export default function Home() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
 
+      {/* All your existing styles remain the same */}
       <style jsx>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
         
@@ -155,7 +393,6 @@ export default function Home() {
           font-weight: 400;
         }
         
-        /* CRT Green Scanlines - Full Width Moving Down */
         .crt-scanlines {
           position: fixed;
           top: 0;
@@ -181,7 +418,6 @@ export default function Home() {
           100% { transform: translateY(9px); }
         }
         
-        /* Additional CRT Effects */
         .crt-background {
           position: fixed;
           top: 0;
@@ -262,7 +498,6 @@ export default function Home() {
           100% { opacity: 1; }
         }
         
-        /* Mobile optimizations */
         @media (max-width: 768px) {
           .crt-scanlines {
             background: repeating-linear-gradient(
@@ -326,8 +561,6 @@ export default function Home() {
           60% { transform: translate(-1px, -1px); }
           80% { transform: translate(-1px, 1px); }
         }
-        
-     
         
         .subtle-glow {
           text-shadow: 
@@ -420,22 +653,15 @@ export default function Home() {
       `}</style>
 
       <div className="bg-black text-white min-h-screen mono-font overflow-hidden relative vhs-filter">
-        {/* CRT Background Effects */}
+        {/* All your existing CRT effects remain the same */}
         <div className="crt-background"></div>
         <div className="crt-static"></div>
         <div className="crt-flicker"></div>
         <div className="crt-vignette"></div>
-        
-        {/* CRT Shader Overlay */}
         <div className="crt-effect"></div>
-
-        {/* Moving CRT Scanlines - Full Width Green Lines */}
         <div className="crt-scanlines"></div>
-
-        {/* Grid + Content wrap */}
         <div className="grid-bg absolute inset-0 opacity-30"></div>
 
-        {/* Main CRT screen effect wrapper */}
         <div className="screen-warp relative z-10 flex flex-col justify-center items-center min-h-screen px-6">
           {showStartPrompt ? (
             <motion.div
@@ -443,7 +669,7 @@ export default function Home() {
               animate={{ opacity: 1 }}
               className="text-center"
             >
-              <h1 className="text-4xl sm:text-6xl font-light mb-8 text-indigo-300 ">
+              <h1 className="text-4xl sm:text-6xl font-light mb-8 text-indigo-300">
                 TREASURE_HUNT.EXE
               </h1>
               <p className="text-gray-300 mb-8 text-lg">
@@ -456,13 +682,105 @@ export default function Home() {
                 Start Experience
               </button>
             </motion.div>
-          ) : !bootDone ? (
+          ) : showPermissionPrompt ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center max-w-2xl mx-auto"
+            >
+              <div className="space-y-6 text-sm sm:text-base">
+                <motion.div
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-cyan-400 text-xl mb-8"
+                >
+                  PERMISSION REQUEST
+                </motion.div>
+                
+                <div className="text-gray-300 space-y-4 mb-8">
+                  <p>This treasure hunt requires access to:</p>
+                  <div className="space-y-2">
+                    {pendingPermissions.includes('location') && (
+                      <div className="flex items-center justify-center space-x-2">
+                        <span className="text-yellow-400">📍</span>
+                        <span>Location services for GPS-based clues</span>
+                      </div>
+                    )}
+                    {pendingPermissions.includes('camera') && (
+                      <div className="flex items-center justify-center space-x-2">
+                        <span className="text-yellow-400">📷</span>
+                        <span>Camera access for QR code scanning</span>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-gray-400 text-sm mt-4">
+                    These permissions enhance your experience but are not required to play.
+                  </p>
+                </div>
+                
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <button
+                    onClick={handlePermissionRequest}
+                    className="button-glow px-6 py-3 bg-black text-green-400 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-green-900 hover:bg-opacity-20"
+                  >
+                    Grant Permissions
+                  </button>
+                  <button
+                    onClick={handleSkipPermissions}
+                    className="px-6 py-3 bg-black text-gray-400 text-sm font-light tracking-wider uppercase border border-gray-600 transition-all duration-300 hover:border-gray-400 hover:text-gray-300"
+                  >
+                    Continue Without
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          ) : systemChecking && !systemChecksDone ? (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className="text-center"
             >
-              {/* Clean boot sequence */}
+              <div className="space-y-4 text-sm sm:text-base">
+                <motion.div
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className="text-cyan-400 mb-6"
+                >
+                  RUNNING SYSTEM DIAGNOSTICS...
+                </motion.div>
+                
+                <div className="space-y-3">
+                  <div className={`flex items-center justify-center space-x-4 ${getStatusColor(locationStatus)}`}>
+                    <span>LOCATION ACCESS</span>
+                    <span className="font-mono">{getStatusIcon(locationStatus)}</span>
+                  </div>
+                  
+                  <div className={`flex items-center justify-center space-x-4 ${getStatusColor(cameraStatus)}`}>
+                    <span>CAMERA PERMISSIONS</span>
+                    <span className="font-mono">{getStatusIcon(cameraStatus)}</span>
+                  </div>
+                  
+                  <div className={`flex items-center justify-center space-x-4 ${getStatusColor(networkStatus)}`}>
+                    <span>NETWORK CONNECTION</span>
+                    <span className="font-mono">{getStatusIcon(networkStatus)}</span>
+                  </div>
+                </div>
+                
+                <motion.div
+                  animate={{ opacity: [1, 0.5, 1] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                  className="text-indigo-300 mt-6"
+                >
+                  <span className="cursor-blink">_</span>
+                </motion.div>
+              </div>
+            </motion.div>
+          ) : systemChecksDone && !bootDone ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center"
+            >
               <div className="space-y-3 text-sm sm:text-base">
                 {bootSequence.slice(0, currentLine + 1).map((line, index) => (
                   <motion.div
@@ -487,7 +805,7 @@ export default function Home() {
               transition={{ duration: 1, ease: "easeOut" }}
               className="text-center max-w-4xl mx-auto"
             >
-              {/* Main title - cleaner, more modern */}
+              {/* Your existing main interface remains the same */}
               <div className="mb-8 sm:mb-12">
                 <motion.h1
                   initial={{ scale: 0.9, opacity: 0 }}
@@ -496,7 +814,7 @@ export default function Home() {
                   className="text-5xl sm:text-7xl md:text-8xl font-light mb-4 leading-tight"
                 >
                   <span 
-                    className={`glitch-text  text-indigo-300 ${glitchActive ? 'glitch-active' : ''}`}
+                    className={`glitch-text text-indigo-300 ${glitchActive ? 'glitch-active' : ''}`}
                     data-text="TREASURE_HUNT"
                   >
                     TREASURE_HUNT
@@ -513,7 +831,6 @@ export default function Home() {
                 </motion.div>
               </div>
               
-              {/* Minimal subtitle */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -528,7 +845,6 @@ export default function Home() {
                 </p>
               </motion.div>
               
-              {/* Clean, modern button */}
               <motion.div
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -542,7 +858,6 @@ export default function Home() {
                 </button>
               </motion.div>
               
-              {/* Minimal footer info */}
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -557,7 +872,7 @@ export default function Home() {
           )}
         </div>
         
-        {/* Subtle floating elements */}
+        {/* Your existing floating elements remain the same */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           {[...Array(8)].map((_, i) => (
             <motion.div
