@@ -1,20 +1,107 @@
 'use client';
-
-import { useEffect, useState } from 'react';
-import { useSignIn, useSignUp, useUser } from '@clerk/nextjs';
+import { useEffect, useState, useRef } from 'react';
+import { useSignIn, useUser } from '@clerk/nextjs';
 import { motion } from 'framer-motion';
 
 export default function SignInPage() {
   const [glitchActive, setGlitchActive] = useState(false);
-  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState(''); // Changed from email to username
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [audioInitialized, setAudioInitialized] = useState(false);
   
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
   const { signIn, setActive } = useSignIn();
-  const { signUp, setActive: setActiveSignUp } = useSignUp();
   const { isSignedIn } = useUser();
+
+  // Vibration/Haptic feedback function
+  const vibrate = (pattern: number | number[] = 50): void => {
+    if (navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
+  };
+
+  // Initialize audio context and background music
+  const initializeAudio = () => {
+    if (!audioContextRef.current) {
+      try {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        setAudioInitialized(true);
+        
+        // Initialize background music
+        if (!backgroundMusicRef.current) {
+          backgroundMusicRef.current = new Audio('/audio/background-music.mp3');
+          backgroundMusicRef.current.loop = true;
+          backgroundMusicRef.current.volume = 0.1; // Light volume
+          
+          backgroundMusicRef.current.addEventListener('canplaythrough', () => {
+            console.log('Sign-in background music loaded successfully');
+          });
+          
+          backgroundMusicRef.current.addEventListener('error', (e) => {
+            console.warn('Sign-in background music failed to load:', e);
+          });
+          
+          try {
+            backgroundMusicRef.current.play();
+          } catch (e) {
+            console.warn('Could not play sign-in background music:', e);
+          }
+        }
+      } catch (error) {
+        console.warn('Audio context initialization failed:', error);
+      }
+    }
+  };
+
+  // Audio feedback functions
+  const playBeep = (frequency = 800, duration = 100) => {
+    if (!audioContextRef.current || !audioInitialized) return;
+    
+    try {
+      const oscillator = audioContextRef.current.createOscillator();
+      const gainNode = audioContextRef.current.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContextRef.current.destination);
+      
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'square';
+      
+      gainNode.gain.setValueAtTime(0.1, audioContextRef.current.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContextRef.current.currentTime + duration / 1000);
+      
+      oscillator.start(audioContextRef.current.currentTime);
+      oscillator.stop(audioContextRef.current.currentTime + duration / 1000);
+    } catch (error) {
+      console.warn('Audio playback failed:', error);
+    }
+  };
+
+  const playSuccessSound = () => {
+    vibrate([100, 50, 100, 50, 150]); // Success vibration pattern
+    playBeep(800, 100);
+    setTimeout(() => playBeep(1000, 100), 150);
+    setTimeout(() => playBeep(1200, 150), 300);
+  };
+
+  const playErrorSound = () => {
+    vibrate([200, 100, 200]); // Error vibration pattern
+    playBeep(400, 200);
+    setTimeout(() => playBeep(350, 200), 250);
+  };
+
+  const playClickSound = () => {
+    vibrate(50); // Button click vibration
+    playBeep(600, 50);
+  };
+
+  const playHoverSound = () => {
+    vibrate(20); // Light hover vibration
+    playBeep(900, 30);
+  };
 
   // Glitch effect
   useEffect(() => {
@@ -22,26 +109,71 @@ export default function SignInPage() {
       setGlitchActive(true);
       setTimeout(() => setGlitchActive(false), 150);
     }, 6000);
-
     return () => clearInterval(glitchTimer);
   }, []);
 
   // Redirect if signed in
   useEffect(() => {
     if (isSignedIn) {
+      playSuccessSound();
       console.log('User is signed in, redirecting...');
-      // window.location.href = '/dashboard';
+      
+      // Fade out background music before redirect
+      if (backgroundMusicRef.current) {
+        const fadeOut = setInterval(() => {
+          if (backgroundMusicRef.current && backgroundMusicRef.current.volume > 0.01) {
+            backgroundMusicRef.current.volume -= 0.02;
+          } else {
+            clearInterval(fadeOut);
+            if (backgroundMusicRef.current) {
+              backgroundMusicRef.current.pause();
+            }
+          }
+        }, 50);
+      }
+      
+      setTimeout(() => {
+        window.location.href = '/dashboard';
+      }, 1000);
     }
-  }, [isSignedIn]);
+  }, [isSignedIn, audioInitialized]);
+
+  // Initialize audio on first user interaction
+  useEffect(() => {
+    const handleFirstInteraction = () => {
+      initializeAudio();
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+    };
+
+    document.addEventListener('click', handleFirstInteraction);
+    document.addEventListener('keydown', handleFirstInteraction);
+
+    return () => {
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+    };
+  }, []);
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (backgroundMusicRef.current) {
+        backgroundMusicRef.current.pause();
+        backgroundMusicRef.current = null;
+      }
+    };
+  }, []);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    playClickSound();
     setLoading(true);
     setError('');
 
     try {
       const result = await signIn?.create({
-        identifier: email,
+        identifier: username, // Changed from email to username
         password: password,
       });
 
@@ -49,9 +181,11 @@ export default function SignInPage() {
         if (setActive) {
           await setActive({ session: result.createdSessionId });
         }
+        playSuccessSound();
         console.log('Sign in successful');
       }
     } catch (err: any) {
+      playErrorSound();
       setError(err.errors?.[0]?.message || 'Sign in failed');
       console.error('Sign in error:', err);
     } finally {
@@ -59,241 +193,31 @@ export default function SignInPage() {
     }
   };
 
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-
-    try {
-      const result = await signUp?.create({
-        emailAddress: email,
-        password: password,
-      });
-
-      if (result?.status === 'complete') {
-        if (setActiveSignUp) {
-          await setActiveSignUp({ session: result.createdSessionId });
-        }
-        console.log('Sign up successful');
-      } else if (result?.status === 'missing_requirements') {
-        // Handle email verification if needed
-        console.log('Email verification required');
-      }
-    } catch (err: any) {
-      setError(err.errors?.[0]?.message || 'Sign up failed');
-      console.error('Sign up error:', err);
-    } finally {
-      setLoading(false);
-    }
+  const handleInputFocus = () => {
+    vibrate(30); // Input focus vibration
+    playBeep(1000, 30);
   };
 
-  
+  const handleButtonHover = () => {
+    if (!loading) playHoverSound();
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleSignIn(e);
+  };
 
   return (
-    <>
-      <style jsx global>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
-        
-        .mono-font {
-          font-family: 'JetBrains Mono', 'Courier New', monospace;
-        }
-        
-        .crt-background {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: radial-gradient(circle at center, rgba(0, 255, 0, 0.03) 0%, transparent 70%);
-          pointer-events: none;
-          z-index: 1;
-        }
-        
-        .crt-static {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="noise" width="100" height="100" patternUnits="userSpaceOnUse"><rect width="100" height="100" fill="transparent"/><circle cx="20" cy="20" r="0.5" fill="rgba(255,255,255,0.1)"/><circle cx="80" cy="40" r="0.5" fill="rgba(255,255,255,0.1)"/><circle cx="40" cy="80" r="0.5" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23noise)"/></svg>');
-          opacity: 0.1;
-          pointer-events: none;
-          z-index: 2;
-        }
-        
-        .crt-flicker {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(transparent 50%, rgba(0, 255, 0, 0.02) 50%);
-          background-size: 100% 4px;
-          pointer-events: none;
-          z-index: 3;
-        }
-        
-        .crt-vignette {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.4) 100%);
-          pointer-events: none;
-          z-index: 4;
-        }
-        
-        .crt-scanlines {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: repeating-linear-gradient(
-            0deg,
-            transparent,
-            transparent 2px,
-            rgba(0, 255, 0, 0.03) 2px,
-            rgba(0, 255, 0, 0.03) 4px
-          );
-          pointer-events: none;
-          z-index: 5;
-        }
-        
-        .screen-warp {
-          filter: blur(0.5px);
-          transform: perspective(1000px) rotateX(0.5deg);
-        }
-        
-        .grid-bg {
-          background-image: 
-            linear-gradient(rgba(0, 255, 150, 0.1) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0, 255, 150, 0.1) 1px, transparent 1px);
-          background-size: 20px 20px;
-          animation: grid-move 20s linear infinite;
-        }
-        
-        @keyframes grid-move {
-          0% { transform: translate(0, 0); }
-          100% { transform: translate(20px, 20px); }
-        }
-        
-        .glitch-text {
-          position: relative;
-          display: inline-block;
-        }
-        
-        .glitch-text.glitch-active::before,
-        .glitch-text.glitch-active::after {
-          content: attr(data-text);
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-        }
-        
-        .glitch-text.glitch-active::before {
-          animation: glitch-1 0.3s ease-in-out;
-          color: #ff0040;
-          z-index: -1;
-        }
-        
-        .glitch-text.glitch-active::after {
-          animation: glitch-2 0.3s ease-in-out;
-          color: #00ffff;
-          z-index: -2;
-        }
-        
-        @keyframes glitch-1 {
-          0%, 100% { transform: translate(0); }
-          20% { transform: translate(-2px, 2px); }
-          40% { transform: translate(-2px, -2px); }
-          60% { transform: translate(2px, 2px); }
-          80% { transform: translate(2px, -2px); }
-        }
-        
-        @keyframes glitch-2 {
-          0%, 100% { transform: translate(0); }
-          20% { transform: translate(2px, 2px); }
-          40% { transform: translate(2px, -2px); }
-          60% { transform: translate(-2px, 2px); }
-          80% { transform: translate(-2px, -2px); }
-        }
-        
-        .button-glow {
-          border: 1px solid currentColor;
-          position: relative;
-          overflow: hidden;
-          background: transparent;
-        }
-        
-        .button-glow::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: -100%;
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-          transition: left 0.5s;
-        }
-        
-        .button-glow:hover::before {
-          left: 100%;
-        }
-        
-        .button-glow:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-        
-        .input-glow {
-          background: rgba(0, 0, 0, 0.6);
-          border: 1px solid rgba(0, 255, 150, 0.3);
-          color: white;
-          transition: all 0.3s ease;
-        }
-        
-        .input-glow:focus {
-          outline: none;
-          border-color: #00ff96;
-          box-shadow: 0 0 10px rgba(0, 255, 150, 0.3);
-        }
-        
-        .subtle-glow {
-          text-shadow: 0 0 10px currentColor;
-        }
-        
-        .vhs-filter {
-          filter: contrast(1.2) brightness(1.1) saturate(1.3);
-        }
-        
-        .loading-dots::after {
-          content: '';
-          animation: loading-dots 1.5s infinite;
-        }
-        
-        @keyframes loading-dots {
-          0% { content: ''; }
-          25% { content: '.'; }
-          50% { content: '..'; }
-          75% { content: '...'; }
-          100% { content: ''; }
-        }
-      `}</style>
-      
       <div className="bg-black text-white min-h-screen mono-font overflow-hidden relative vhs-filter">
         {/* CRT Effects */}
         <div className="crt-background"></div>
         <div className="crt-static"></div>
         <div className="crt-flicker"></div>
         <div className="crt-vignette"></div>
-        <div className="crt-scanlines"></div>
+        <div className="crt-scanlines opacity-40"></div>
         <div className="grid-bg absolute inset-0 opacity-20"></div>
-
-        <div className="screen-warp relative z-10 flex flex-col justify-center items-center min-h-screen px-6">
+        
+        <div className="screen-warp relative z-10 flex flex-col justify-center items-center min-h-screen px-6 ">
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
@@ -315,15 +239,6 @@ export default function SignInPage() {
                   ACCESS_CONTROL
                 </span>
               </motion.h1>
-              
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.8, delay: 0.6 }}
-                className="text-lg text-cyan-400 font-light subtle-glow mb-6"
-              >
-                SECURE AUTHENTICATION REQUIRED
-              </motion.div>
             </div>
             
             {/* Auth Form */}
@@ -331,38 +246,39 @@ export default function SignInPage() {
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.8, delay: 0.9 }}
-              className="relative"
+              className="relative bg-black rounded-lg "
             >
               <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/20 via-cyan-500/20 to-green-500/20 rounded-lg blur-xl"></div>
-              <div className="relative bg-black/80 backdrop-blur-sm rounded-lg border border-green-400/30 p-8">
+              <div className={`relative bg-black/80 backdrop-blur-sm rounded-lg border border-green-400/30 p-8 ${loading ? 'pulse-glow' : ''}`}>
                 
-
-                  
-
                 {/* Error Message */}
                 {error && (
-                  <div className="mb-4 p-3 bg-red-900/20 border border-red-500/30 rounded text-red-400 text-sm">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="mb-4 p-3 bg-red-900/20 border border-red-500/30 rounded text-red-400 text-sm error-shake"
+                  >
                     {error}
-                  </div>
+                  </motion.div>
                 )}
-
+                
                 {/* Form */}
-                <form onSubmit={mode === 'signin' ? handleSignIn : handleSignUp} className="space-y-4">
+                <form onSubmit={handleFormSubmit} className="space-y-4 bg">
                   <div>
-                    <label className="block text-green-400 text-sm font-light mb-2 tracking-wide uppercase">
-                      Email Address
+                    <label className="block text-green-400 text-sm font-light mb-2 tracking-wide uppercase ">
+                      Team Name
                     </label>
                     <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full p-3 input-glow rounded font-mono text-sm"
-                      placeholder="user@vitstudent.ac.in"
+                      type="text" // Changed from email to text
+                      value={username} // Changed from email to username
+                      onChange={(e) => setUsername(e.target.value)} // Changed from setEmail to setUsername
+                      onFocus={handleInputFocus}
+                      className="w-full p-3 input-glow rounded font-mono text-sm border border-green-400/30 focus:border-green-500 focus:ring-2 focus:ring-green-500/20 transition-all duration-300"
+                      placeholder="Enter your Team name" // Updated placeholder
                       required
                       disabled={loading}
                     />
                   </div>
-
                   <div>
                     <label className="block text-green-400 text-sm font-light mb-2 tracking-wide uppercase">
                       Password
@@ -371,31 +287,30 @@ export default function SignInPage() {
                       type="password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full p-3 input-glow rounded font-mono text-sm"
+                      onFocus={handleInputFocus}
+                      className="w-full p-3 input-glow rounded font-mono text-sm border border-green-400/30 focus:border-green-500 focus:ring-2 focus:ring-green-500/20 transition-all duration-300"
                       placeholder="••••••••"
                       required
                       disabled={loading}
                     />
                   </div>
+                  <br/>
 
                   <button
                     type="submit"
                     disabled={loading}
+                    onMouseEnter={handleButtonHover}
                     className="w-full button-glow px-6 py-3 bg-transparent text-indigo-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-indigo-900/20 disabled:opacity-50"
                   >
                     {loading ? (
                       <span className="loading-dots">
-                        {mode === 'signin' ? 'AUTHENTICATING' : 'CREATING ACCOUNT'}
+                      AUTHENTICATING
                       </span>
                     ) : (
-                      mode === 'signin' ? 'AUTHENTICATE' : 'CREATE ACCOUNT'
+                       'AUTHENTICATE' 
                     )}
                   </button>
                 </form>
-
-              
-
-                
               </div>
             </motion.div>
             
@@ -408,6 +323,8 @@ export default function SignInPage() {
             >
               <p className="text-gray-500 text-xs font-light tracking-wider">
                 ENCRYPTED CONNECTION ESTABLISHED
+                    <br />
+                Developed by <a href="https://ospcvitc.club" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">OSPC</a>
               </p>
             </motion.div>
           </motion.div>
@@ -448,9 +365,8 @@ export default function SignInPage() {
           PROTOCOL: HTTPS
         </div>
         <div className="absolute bottom-4 right-4 text-gray-500 opacity-30 text-xs mono-font">
-          AUTH_SYS v2.1
+          AUTH_SYS v6.9
         </div>
       </div>
-    </>
   );
 }

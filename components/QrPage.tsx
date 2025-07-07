@@ -1,5 +1,3 @@
-'use client';
-
 import { useEffect, useRef, useState } from 'react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { motion } from 'framer-motion';
@@ -9,7 +7,7 @@ interface GPSCoordinates {
   longitude: number;
 }
 
-export default function QRScanner() {
+export default function HTML5QRScanner() {
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
   const [data, setData] = useState('No result');
   const [isScanning, setIsScanning] = useState(false);
@@ -554,19 +552,7 @@ export default function QRScanner() {
           ))}
         </div>
         
-        {/* Corner Status Text */}
-        <div className="absolute top-4 left-4 text-green-400 opacity-30 text-xs mono-font">
-          GPS_MODE: ACTIVE
-        </div>
-        <div className="absolute top-4 right-4 text-cyan-400 opacity-30 text-xs mono-font">
-          STATUS: READY
-        </div>
-        <div className="absolute bottom-4 left-4 text-indigo-400 opacity-30 text-xs mono-font">
-          PROTOCOL: GPS_QR_v2.0
-        </div>
-        <div className="absolute bottom-4 right-4 text-gray-500 opacity-30 text-xs mono-font">
-          LOCATION_SYS v1.0
-        </div>
+  
       </div>
     </>
   );

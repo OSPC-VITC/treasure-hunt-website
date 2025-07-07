@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import Head from 'next/head';
 import { motion } from 'framer-motion';
+import router from 'next/router';
 
 export default function Home() {
   const [bootDone, setBootDone] = useState(false);
@@ -26,6 +27,13 @@ export default function Home() {
     "SCANNING FREQUENCIES...",
     "READY TO EXECUTE"
   ];
+
+  // Vibration/Haptic feedback function - lighter patterns
+  const vibrate = (pattern: number | number[] = 15): void => {
+    if (navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
+  };
 
   // Check existing permissions status
   const checkExistingPermissions = async () => {
@@ -186,8 +194,9 @@ export default function Home() {
     }
   };
 
-  // Handle permission requests with better flow
+  // Handle permission requests with lighter feedback
   const handlePermissionRequest = async () => {
+    vibrate(25); // Light button click vibration
     playBeep(800, 100);
     setShowPermissionPrompt(false);
     
@@ -214,11 +223,10 @@ export default function Home() {
     // Continue with system checks
     setTimeout(() => {
       setSystemChecksDone(true);
+      vibrate(30); // Light success vibration
       playBeep(1000, 200);
     }, 1000);
   };
-
-  
 
   // Check network connectivity with better error handling
   const checkNetwork = async () => {
@@ -265,6 +273,7 @@ export default function Home() {
       await checkNetwork();
       setTimeout(() => {
         setSystemChecksDone(true);
+        vibrate(30); // Light success vibration
         playBeep(1000, 200);
       }, 1000);
     }
@@ -274,6 +283,8 @@ export default function Home() {
   // Initialize audio and start the experience
   const startExperience = async () => {
     if (audioInitialized) return;
+    
+    vibrate(10); // Very light initial button press
     
     try {
       const ctx = new ((window.AudioContext || (window as any).webkitAudioContext))();
@@ -321,11 +332,13 @@ export default function Home() {
     const bootTimer = setInterval(() => {
       if (currentLine < bootSequence.length - 1) {
         setCurrentLine(prev => prev + 1);
+        vibrate(15); // Very light vibration for each boot line
         playBeep(600 + currentLine * 100, 80);
       } else {
         clearInterval(bootTimer);
         setTimeout(() => {
           setBootDone(true);
+          vibrate(40); // Light boot complete vibration
           playBeep(1200, 200);
         }, 800);
       }
@@ -339,6 +352,7 @@ export default function Home() {
     
     const glitchTimer = setInterval(() => {
       setGlitchActive(true);
+      vibrate(10); // Very subtle glitch vibration
       playGlitchSound();
       setTimeout(() => setGlitchActive(false), 150);
     }, 4000);
@@ -407,8 +421,10 @@ export default function Home() {
   };
 
   const handleEnterClick = () => {
+    vibrate(35); // Light enter button vibration
     playBeep(1000, 150);
     console.log("Entering the treasure hunt...");
+    window.location.replace('/dashboard'); // Redirect to the dashboard
     console.log("System Status:", {
       location: locationStatus,
       camera: cameraStatus,
@@ -473,6 +489,7 @@ export default function Home() {
               </p>
               <button
                 onClick={startExperience}
+                onMouseEnter={() => vibrate(10)} // Very light hover vibration
                 className="button-glow px-8 py-4 bg-black text-indigo-300 text-base font-light tracking-wider uppercase transition-all duration-300 hover:bg-green-900 hover:bg-opacity-20"
               >
                 Start Experience
@@ -517,11 +534,11 @@ export default function Home() {
                 <div className="flex flex-col sm:flex-row gap-4 justify-center">
                   <button
                     onClick={handlePermissionRequest}
+                    onMouseEnter={() => vibrate(10)} // Very light hover vibration
                     className="button-glow px-6 py-3 bg-black text-green-400 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-green-900 hover:bg-opacity-20"
                   >
                     Grant Permissions
                   </button>
-                 
                 </div>
               </div>
             </motion.div>
@@ -643,6 +660,7 @@ export default function Home() {
               >
                 <button 
                   onClick={handleEnterClick}
+                  onMouseEnter={() => vibrate(12)} // Light hover vibration
                   className="button-glow px-8 sm:px-12 py-4 sm:py-5 bg-black text-indigo-300 text-sm sm:text-base font-light tracking-wider uppercase transition-all duration-300 hover:bg-green-900 hover:bg-opacity-20"
                 >
                   Enter
