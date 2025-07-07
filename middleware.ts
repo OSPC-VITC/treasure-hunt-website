@@ -14,7 +14,7 @@ export default clerkMiddleware(async (auth, req) => {
   // If user is not authenticated
   if (!userId) {
     // Allow access to the home page, auth pages, and audio files
-    if (pathname === '/' || pathname.startsWith('/sign-in') || pathname.startsWith('/audio')) {
+    if (pathname === '/' || pathname.startsWith('/sign-in') || pathname.startsWith('/audio') || pathname.startsWith('/manifest.json')) {
       return NextResponse.next();
     }
     

@@ -34,6 +34,7 @@ export default function RootLayout({
   return (
     <ClerkProvider>
       <html lang="en">
+        <link rel="manifest" href="/manifest.json" />
         <body className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} antialiased`}>
           {children}
         </body>
