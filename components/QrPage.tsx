@@ -24,6 +24,43 @@ interface LocationData {
   qrText: string;
 }
 
+interface ApiResponse {
+  team_name: string;
+  clues: {
+    location: number;
+    unlocked: boolean;
+    timestamp: string | null;
+  }[];
+  progress: {
+    unlocked: number;
+    total: number;
+    percentage: number;
+    nextClue: number | null;
+  };
+  lastUpdated: string;
+  isNewTeam?: boolean;
+}
+
+interface UnlockResponse {
+  success: boolean;
+  message: string;
+  location: number;
+  timestamp: string;
+  progress: {
+    unlocked: number;
+    total: number;
+    percentage: number;
+    nextClue: number | null;
+  };
+  updated_clues: {
+    location: number;
+    unlocked: boolean;
+    timestamp: string | null;
+  }[];
+  wasUpdated: boolean;
+  expectedClue?: number; // Added for sequential validation
+}
+
 export default function HTML5QRScanner() {
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -42,6 +79,8 @@ export default function HTML5QRScanner() {
   const [audioInitialized, setAudioInitialized] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const [scanAttempts, setScanAttempts] = useState(0);
+  const [apiData, setApiData] = useState<ApiResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Vibration/Haptic feedback function
   const vibrate = (pattern: number | number[] = 50): void => {
@@ -195,6 +234,67 @@ export default function HTML5QRScanner() {
     playBeep(800, 30);
   };
 
+  // Fetch current clue data from API
+  const fetchClueData = async (): Promise<void> => {
+    try {
+      setIsLoading(true);
+      
+      const response = await fetch('/api/clues', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data: ApiResponse = await response.json();
+      setApiData(data);
+      
+      // Update current clue atom based on API data
+      const nextClue = data.progress.nextClue;
+      if (nextClue) {
+        setCurrentClue(nextClue);
+      } else {
+        // All clues completed
+        setCurrentClue(data.progress.total + 1);
+      }
+      
+      setData(`Looking for clue #${nextClue || 'completed'}...`);
+    } catch (err) {
+      console.error('Error fetching clue data:', err);
+      setData('Error loading clue data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Unlock a clue via API using PUT method
+  const unlockClue = async (location: number): Promise<UnlockResponse | null> => {
+    try {
+      const response = await fetch('/api/clues', {
+        method: 'PUT', // Changed from POST to PUT
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ location }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const data: UnlockResponse = await response.json();
+      return data;
+    } catch (err) {
+      console.error('Error unlocking clue:', err);
+      throw err;
+    }
+  };
+
   // Get location data from environment variables - fixed version
   const getLocationData = (id: number): LocationData => {
     return {
@@ -242,7 +342,9 @@ export default function HTML5QRScanner() {
 
   // Find location by QR text - only check current clue
   const findLocationByQRText = (qrText: string): LocationData | null => {
-    const currentLocationData = getLocationData(currentClue);
+    if (!apiData?.progress.nextClue) return null;
+    
+    const currentLocationData = getLocationData(apiData.progress.nextClue);
     
     // Only accept QR code for the current clue
     if (currentLocationData.qrText === qrText) {
@@ -254,7 +356,7 @@ export default function HTML5QRScanner() {
 
   // Check if all clues are completed
   const isGameCompleted = (): boolean => {
-    return currentClue > totalClues;
+    return apiData ? apiData.progress.nextClue === null : false;
   };
 
   // Initialize audio on first user interaction
@@ -272,6 +374,11 @@ export default function HTML5QRScanner() {
       document.removeEventListener('click', handleFirstInteraction);
       document.removeEventListener('keydown', handleFirstInteraction);
     };
+  }, []);
+
+  // Fetch initial data
+  useEffect(() => {
+    fetchClueData();
   }, []);
 
   // Glitch effect
@@ -354,7 +461,7 @@ export default function HTML5QRScanner() {
     
     // Check if game is already completed
     if (isGameCompleted()) {
-      setData(`🎉 Game completed! All ${totalClues} clues found!`);
+      setData(`🎉 Game completed! All ${apiData?.progress.total || totalClues} clues found!`);
       playSuccessSound();
       return;
     }
@@ -366,14 +473,15 @@ export default function HTML5QRScanner() {
       // Check if this QR belongs to a different clue
       let belongsToOtherClue = false;
       for (let i = 1; i <= totalClues; i++) {
-        if (i !== currentClue) {
+        if (i !== (apiData?.progress.nextClue || currentClue)) {
           const otherLocation = getLocationData(i);
           if (otherLocation.qrText === qrData) {
             belongsToOtherClue = true;
-            if (i < currentClue) {
-              setData(`❌ Clue #${i} already completed. Looking for clue #${currentClue}`);
+            const currentClueNum = apiData?.progress.nextClue || currentClue;
+            if (i < currentClueNum) {
+              setData(`❌ Clue #${i} already completed. Looking for clue #${currentClueNum}`);
             } else {
-              setData(`❌ Wrong clue! Complete clue #${currentClue} first`);
+              setData(`❌ Wrong clue! Complete clue #${currentClueNum} first`);
             }
             break;
           }
@@ -381,7 +489,8 @@ export default function HTML5QRScanner() {
       }
       
       if (!belongsToOtherClue) {
-        setData(`❌ Invalid QR code. Looking for clue #${currentClue}`);
+        const currentClueNum = apiData?.progress.nextClue || currentClue;
+        setData(`❌ Invalid QR code. Looking for clue #${currentClueNum}`);
       }
       
       playErrorSound();
@@ -390,17 +499,47 @@ export default function HTML5QRScanner() {
 
     // Check if location coordinates are valid (skip GPS if coordinates are 0,0)
     if (matchedLocation.coordinates.lat === 0 && matchedLocation.coordinates.lng === 0) {
-      // Success! Increment current clue
-      setCurrentClue(currentClue + 1);
-      setData(`✅ Clue #${currentClue} completed! "${matchedLocation.name}" unlocked!`);
-      setUnlockedLocation(matchedLocation);
-      playCelebrationSequence();
-      
-      // Check if this was the last clue
-      if (currentClue === totalClues) {
-        setTimeout(() => {
-          setData(`🎉 CONGRATULATIONS! All ${totalClues} clues completed! Game finished!`);
-        }, 2000);
+      try {
+        setData('🔄 Unlocking clue...');
+        const unlockResult = await unlockClue(matchedLocation.id);
+        
+        if (unlockResult?.success) {
+          // Update API data
+          await fetchClueData();
+          
+          setData(`✅ Clue #${matchedLocation.id} completed! "${matchedLocation.name}" unlocked!`);
+          setUnlockedLocation(matchedLocation);
+          playCelebrationSequence();
+          
+          // Check if this was the last clue
+          if (unlockResult.progress.nextClue === null) {
+            setTimeout(() => {
+              setData(`🎉 CONGRATULATIONS! All ${unlockResult.progress.total} clues completed! Game finished!`);
+            }, 2000);
+          }
+        } else {
+          // Handle sequential validation error
+          if (unlockResult?.expectedClue) {
+            setData(`❌ Must complete clues in order. Expected clue #${unlockResult.expectedClue}, got #${matchedLocation.id}`);
+          } else {
+            setData(`❌ Failed to unlock clue: ${unlockResult?.message || 'Unknown error'}`);
+          }
+          playErrorSound();
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        
+        // Handle specific error messages from the API
+        if (errorMessage.includes('Must complete clues in order')) {
+          setData(`❌ ${errorMessage}`);
+        } else if (errorMessage.includes('Location already unlocked')) {
+          setData(`❌ Clue #${matchedLocation.id} already completed!`);
+        } else if (errorMessage.includes('Team not found')) {
+          setData(`❌ Team data error. Please try restarting the scanner.`);
+        } else {
+          setData(`❌ Error unlocking clue: ${errorMessage}`);
+        }
+        playErrorSound();
       }
       return;
     }
@@ -417,17 +556,47 @@ export default function HTML5QRScanner() {
       const tolerance = 50; // 50 meters tolerance
       
       if (distance <= tolerance) {
-        // Success! Increment current clue
-        setCurrentClue(currentClue + 1);
-        setData(`✅ Clue #${currentClue} completed! "${matchedLocation.name}" unlocked!`);
-        setUnlockedLocation(matchedLocation);
-        playCelebrationSequence();
-        
-        // Check if this was the last clue
-        if (currentClue === totalClues) {
-          setTimeout(() => {
-            setData(`🎉 CONGRATULATIONS! All ${totalClues} clues completed! Game finished!`);
-          }, 2000);
+        try {
+          setData('🔄 Unlocking clue...');
+          const unlockResult = await unlockClue(matchedLocation.id);
+          
+          if (unlockResult?.success) {
+            // Update API data
+            await fetchClueData();
+            
+            setData(`✅ Clue #${matchedLocation.id} completed! "${matchedLocation.name}" unlocked!`);
+            setUnlockedLocation(matchedLocation);
+            playCelebrationSequence();
+            
+            // Check if this was the last clue
+            if (unlockResult.progress.nextClue === null) {
+              setTimeout(() => {
+                setData(`🎉 CONGRATULATIONS! All ${unlockResult.progress.total} clues completed! Game finished!`);
+              }, 2000);
+            }
+          } else {
+            // Handle sequential validation error
+            if (unlockResult?.expectedClue) {
+              setData(`❌ Must complete clues in order. Expected clue #${unlockResult.expectedClue}, got #${matchedLocation.id}`);
+            } else {
+              setData(`❌ Failed to unlock clue: ${unlockResult?.message || 'Unknown error'}`);
+            }
+            playErrorSound();
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          
+          // Handle specific error messages from the API
+          if (errorMessage.includes('Must complete clues in order')) {
+            setData(`❌ ${errorMessage}`);
+          } else if (errorMessage.includes('Location already unlocked')) {
+            setData(`❌ Clue #${matchedLocation.id} already completed!`);
+          } else if (errorMessage.includes('Team not found')) {
+            setData(`❌ Team data error. Please try restarting the scanner.`);
+          } else {
+            setData(`❌ Error unlocking clue: ${errorMessage}`);
+          }
+          playErrorSound();
         }
       } else {
         setData(`❌ You're ${Math.round(distance)}m away from the location. Get closer!`);
@@ -530,21 +699,25 @@ export default function HTML5QRScanner() {
       }
     };
 
-    initializeScanner();
+    if (apiData && !isGameCompleted()) {
+      initializeScanner();
+    }
 
     return () => {
       if (scanner) {
         scanner.clear().catch(console.error);
       }
     };
-  }, [currentClue, totalClues]);
+  }, [apiData]);
 
   const restartScanner = () => {
     playButtonSound();
     setUnlockedLocation(null);
-    setData(`Looking for clue #${currentClue}...`);
     setShowCelebration(false);
     setScanAttempts(0);
+    
+    // Refresh API data
+    fetchClueData();
     
     setTimeout(() => {
       window.location.reload();
@@ -559,6 +732,10 @@ export default function HTML5QRScanner() {
       console.error('Failed to get location:', error);
     }
   };
+
+  // Calculate current progress from API data
+  const completedClues = apiData?.progress.unlocked || 0;
+  const nextClueNumber = apiData?.progress.nextClue;
 
   return (
     <div className="bg-black text-white min-h-screen mono-font overflow-hidden relative z-0">
@@ -618,10 +795,10 @@ export default function HTML5QRScanner() {
               transition={{ duration: 0.8, delay: 0.8 }}
               className="text-sm text-orange-400 mb-4"
             >
-              CLUE PROGRESS: {Math.max(0, currentClue - 1)} / {totalClues}
-              {!isGameCompleted() && (
+              CLUE PROGRESS: {completedClues} / {apiData?.progress.total || totalClues}
+              {!isGameCompleted() && nextClueNumber && (
                 <div className="text-xs text-gray-400 mt-1">
-                  Looking for clue #{currentClue}
+                  Looking for clue #{nextClueNumber}
                 </div>
               )}
             </motion.div>
@@ -635,11 +812,10 @@ export default function HTML5QRScanner() {
               className="mb-6 bg-gradient-to-r from-yellow-900/40 to-orange-900/40 border border-yellow-400 rounded-lg p-6"
             >
               <h2 className="text-2xl text-yellow-400 font-light mb-2">🏆 GAME COMPLETED!</h2>
-              <p className="text-white">Congratulations! You've found all {totalClues} clues!</p>
+              <p className="text-white">Congratulations! You've found all {apiData?.progress.total || totalClues} clues!</p>
             </motion.div>
           )}
 
-       
           {/* Achievement Display - Grand Unlocked Location */}
           {unlockedLocation && (
             <motion.div
@@ -733,7 +909,7 @@ export default function HTML5QRScanner() {
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ duration: 0.3 }}
               >
-                {data}
+                {isLoading ? 'Loading...' : data}
               </motion.div>
             </div>
           </motion.div>
@@ -807,7 +983,7 @@ export default function HTML5QRScanner() {
           </motion.div>
           
           {/* Scanner Container */}
-          {!isGameCompleted() && (
+          {!isGameCompleted() && apiData && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}

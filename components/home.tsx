@@ -1,13 +1,32 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { motion, AnimatePresence, Variant } from 'framer-motion';
-import { Lock, Unlock, Map, MapPin, X } from 'lucide-react';
+import { Lock, Unlock, Map, MapPin, X, RefreshCw } from 'lucide-react';
 import { useAtom } from 'jotai';
 import {
   currentClueAtom,
   totalCluesAtom,
 } from '@/atoms/clueAtoms';
 
-// Type definitions
+// Type definitions matching your API response
+interface ClueProgress {
+  location: number;
+  unlocked: boolean;
+  timestamp: string | null;
+}
+
+interface ApiResponse {
+  team_name: string;
+  clues: ClueProgress[];
+  progress: {
+    unlocked: number;
+    total: number;
+    percentage: number;
+    nextClue: number | null;
+  };
+  lastUpdated: string;
+  isNewTeam?: boolean;
+}
+
 interface Activity {
   action: string;
   time: string;
@@ -31,11 +50,11 @@ interface MapLocation {
   name: string;
   isUnlocked: boolean;
   coordinates: { lat: number; lng: number };
+  timestamp?: string | null;
 }
 
 // Helper function to get location data from environment variables
 const getLocationData = (id: number): { id: number; name: string; coordinates: { lat: number; lng: number } } => {
-  // Use window check for client-side access
   if (typeof window === 'undefined') {
     return {
       id,
@@ -100,41 +119,102 @@ const getClueText = (clueNumber: number): string => {
 };
 
 const HomeContent: React.FC<HomeContentProps> = ({
-  completedClues: propCompletedClues,
-  isLoading = false,
+  isLoading: propIsLoading = false,
 }) => {
   const [showMap, setShowMap] = useState<boolean>(false);
+  const [apiData, setApiData] = useState<ApiResponse | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(propIsLoading);
+  const [error, setError] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   
-  // Use atoms for current clue and total clues
-  const [currentClue] = useAtom(currentClueAtom);
+  // Use atoms for fallback values
+  const [currentClue, setCurrentClue] = useAtom(currentClueAtom);
   const [totalClues] = useAtom(totalCluesAtom);
 
-  // Fix: Use prop value if provided, otherwise fallback to atom-based calculation
-  const completedClues = propCompletedClues !== undefined ? propCompletedClues : Math.max(0, currentClue - 1);
-
-  // Map locations based on completed clues using environment variables
-  const mapLocations: MapLocation[] = useMemo(() => {
-    const locations: MapLocation[] = [];
-    for (let i = 1; i <= totalClues; i++) {
-      const locationData = getLocationData(i);
-      locations.push({
-        ...locationData,
-        isUnlocked: completedClues >= i
+  // Fetch data from API
+  const fetchClueData = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const response = await fetch('/api/clues', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
-    }
-    return locations;
-  }, [completedClues, totalClues]);
 
-  // Memoized calculations
-  const progressPercentage = useMemo(() => {
-    if (totalClues === 0) return 0;
-    return Math.round((completedClues / totalClues) * 100);
-  }, [completedClues, totalClues]);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data: ApiResponse = await response.json();
+      setApiData(data);
+      
+      // Update current clue atom based on API data
+      const nextClue = data.progress.nextClue;
+      if (nextClue) {
+        setCurrentClue(nextClue);
+      } else {
+        // All clues completed
+        setCurrentClue(data.progress.total + 1);
+      }
+      
+      setLastRefresh(new Date());
+    } catch (err) {
+      console.error('Error fetching clue data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch clue data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchClueData();
+  }, []);
+
+  // Auto-refresh every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(fetchClueData, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Calculate values from API data or fallback to atoms
+  const completedClues = apiData?.progress.unlocked ?? Math.max(0, currentClue - 1);
+  const progressPercentage = apiData?.progress.percentage ?? Math.round((completedClues / totalClues) * 100);
+  const nextClueNumber = apiData?.progress.nextClue ?? currentClue;
+
+  // Map locations based on API data
+  const mapLocations: MapLocation[] = useMemo(() => {
+    if (!apiData) {
+      // Fallback to atom-based calculation
+      const locations: MapLocation[] = [];
+      for (let i = 1; i <= totalClues; i++) {
+        const locationData = getLocationData(i);
+        locations.push({
+          ...locationData,
+          isUnlocked: completedClues >= i
+        });
+      }
+      return locations;
+    }
+
+    // Use API data
+    return apiData.clues.map(clue => {
+      const locationData = getLocationData(clue.location);
+      return {
+        ...locationData,
+        isUnlocked: clue.unlocked,
+        timestamp: clue.timestamp
+      };
+    });
+  }, [apiData, completedClues, totalClues]);
 
   // Current clue data from environment variables
   const currentClueData: ClueData = useMemo(() => ({
-    text: getClueText(currentClue),
-  }), [currentClue]);
+    text: getClueText(nextClueNumber),
+  }), [nextClueNumber]);
 
   const unlockedLocations = useMemo(() => 
     mapLocations.filter(location => location.isUnlocked).length,
@@ -188,21 +268,31 @@ const HomeContent: React.FC<HomeContentProps> = ({
     }
   };
 
-  // Fix: Add safety check for totalClues
-  if (totalClues === 0) {
+  // Error state
+  if (error) {
     return (
       <div className="space-y-4">
         <div className="bg-black/80 backdrop-blur-sm rounded-lg border border-red-400/30 p-4">
           <div className="text-center">
-            <h2 className="text-lg font-light mb-2 text-red-400">Configuration Error</h2>
-            <p className="text-sm text-gray-400">No clues configured. Please check your environment variables.</p>
+            <h2 className="text-lg font-light mb-2 text-red-400">Connection Error</h2>
+            <p className="text-sm text-gray-400 mb-4">{error}</p>
+            <motion.button
+              onClick={fetchClueData}
+              className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-400/50 hover:border-red-400/70 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 flex items-center mx-auto"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Retry
+            </motion.button>
           </div>
         </div>
       </div>
     );
   }
 
-  if (isLoading) {
+  // Loading state
+  if (isLoading && !apiData) {
     return (
       <div className="space-y-4">
         {[...Array(3)].map((_, i) => (
@@ -232,9 +322,27 @@ const HomeContent: React.FC<HomeContentProps> = ({
       >
         <div className="absolute inset-0 bg-gradient-to-r from-green-500/10 via-cyan-500/10 to-indigo-500/10 rounded-lg blur-xl group-hover:blur-lg transition-all duration-300"></div>
         <div className="relative">
-          <h2 className="text-lg font-light mb-4 text-green-400 tracking-wide uppercase">
-            Mission Status
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-light text-green-400 tracking-wide uppercase">
+              Mission Status
+            </h2>
+            <div className="flex items-center space-x-2">
+              <motion.button
+                onClick={fetchClueData}
+                className="text-gray-400 hover:text-green-400 transition-colors p-1 hover:bg-gray-800/50 rounded"
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}
+                disabled={isLoading}
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              </motion.button>
+              {apiData && (
+                <span className="text-xs text-gray-500">
+                  {apiData.team_name}
+                </span>
+              )}
+            </div>
+          </div>
           
           <div className="text-center mb-4">
             <motion.div 
@@ -271,10 +379,15 @@ const HomeContent: React.FC<HomeContentProps> = ({
             </div>
           </div>
 
-          <div className="text-center">
+          <div className="flex justify-between items-center">
             <span className="text-xs text-gray-500">
               {Math.max(0, totalClues - completedClues)} clues remaining
             </span>
+            {apiData && (
+              <span className="text-xs text-gray-500">
+                Updated: {new Date(apiData.lastUpdated).toLocaleTimeString()}
+              </span>
+            )}
           </div>
         </div>
       </motion.div>
@@ -364,7 +477,7 @@ const HomeContent: React.FC<HomeContentProps> = ({
       </motion.div>
 
       {/* Current Clue */}
-      {currentClue <= totalClues && (
+      {nextClueNumber && nextClueNumber <= totalClues && (
         <motion.div 
           variants={cardVariants}
           className="relative bg-black/80 backdrop-blur-sm rounded-lg border border-cyan-400/30 p-4 hover:border-cyan-400/50 transition-all duration-300 group"
@@ -373,7 +486,7 @@ const HomeContent: React.FC<HomeContentProps> = ({
           <div className="relative">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-base font-light text-cyan-400 tracking-wide uppercase">
-                Current Clue #{currentClue}
+                Current Clue #{nextClueNumber}
               </h3>
               <motion.div 
                 className="w-3 h-3 bg-green-400 rounded-full shadow-lg shadow-green-400/50"
@@ -399,6 +512,24 @@ const HomeContent: React.FC<HomeContentProps> = ({
                 "{currentClueData.text}"
               </p>
             </motion.div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Completion Message */}
+      {completedClues === totalClues && (
+        <motion.div 
+          variants={cardVariants}
+          className="relative bg-black/80 backdrop-blur-sm rounded-lg border border-gold-400/30 p-4 hover:border-gold-400/50 transition-all duration-300 group"
+        >
+          <div className="absolute inset-0 bg-gradient-to-r from-yellow-500/10 via-orange-500/10 to-red-500/10 rounded-lg blur-xl group-hover:blur-lg transition-all duration-300"></div>
+          <div className="relative text-center">
+            <h3 className="text-lg font-light text-yellow-400 tracking-wide uppercase mb-2">
+              🎉 Mission Complete! 🎉
+            </h3>
+            <p className="text-gray-300 text-sm">
+              Congratulations! You've successfully completed all treasure hunt clues!
+            </p>
           </div>
         </motion.div>
       )}
@@ -467,9 +598,16 @@ const HomeContent: React.FC<HomeContentProps> = ({
                           {location.isUnlocked ? location.name : 'Locked Arena'}
                         </span>
                       </div>
-                      <span className="text-xs text-gray-500 bg-gray-800/50 px-2 py-1 rounded">
-                        #{location.id}
-                      </span>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs text-gray-500 bg-gray-800/50 px-2 py-1 rounded">
+                          #{location.id}
+                        </span>
+                        {location.isUnlocked && location.timestamp && (
+                          <span className="text-xs text-gray-500">
+                            {new Date(location.timestamp).toLocaleTimeString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {location.isUnlocked && (
                       <motion.div 
