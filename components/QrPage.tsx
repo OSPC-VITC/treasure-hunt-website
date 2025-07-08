@@ -1,25 +1,284 @@
 import { useEffect, useRef, useState } from 'react';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+import { Html5QrcodeScanner, Html5QrcodeScanType } from 'html5-qrcode';
 import { motion } from 'framer-motion';
+import { useAtom } from 'jotai';
+import { launchConfetti, playSuccessSfx, playDeepSfx } from '@/utils/celebrate';
+import {
+  currentClueAtom,
+  totalCluesAtom,
+} from '@/atoms/clueAtoms';
 
 interface GPSCoordinates {
   latitude: number;
   longitude: number;
 }
 
+interface LocationData {
+  id: number;
+  name: string;
+  coordinates: {
+    lat: number;
+    lng: number;
+  };
+  clue: string;
+  qrText: string;
+}
+
 export default function HTML5QRScanner() {
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  
+  // Jotai atoms
+  const [currentClue, setCurrentClue] = useAtom(currentClueAtom);
+  const [totalClues] = useAtom(totalCluesAtom);
+  
   const [data, setData] = useState('No result');
   const [isScanning, setIsScanning] = useState(false);
   const [glitchActive, setGlitchActive] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<GPSCoordinates | null>(null);
   const [locationError, setLocationError] = useState<string>('');
   const [locationStatus, setLocationStatus] = useState<'idle' | 'getting' | 'success' | 'error'>('idle');
+  const [unlockedLocation, setUnlockedLocation] = useState<LocationData | null>(null);
+  const [audioInitialized, setAudioInitialized] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [scanAttempts, setScanAttempts] = useState(0);
+
+  // Vibration/Haptic feedback function
+  const vibrate = (pattern: number | number[] = 50): void => {
+    if (navigator.vibrate) {
+      navigator.vibrate(pattern);
+    }
+  };
+
+  // Initialize audio context
+  const initializeAudio = (): void => {
+    if (!audioContextRef.current) {
+      try {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        setAudioInitialized(true);
+      } catch (error) {
+        console.warn('Audio context initialization failed:', error);
+      }
+    }
+  };
+
+  // Audio feedback functions
+  const playBeep = (frequency: number = 800, duration: number = 100): void => {
+    if (!audioContextRef.current || !audioInitialized) return;
+    
+    try {
+      const oscillator = audioContextRef.current.createOscillator();
+      const gainNode = audioContextRef.current.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContextRef.current.destination);
+      
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'square';
+      
+      gainNode.gain.setValueAtTime(0.1, audioContextRef.current.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContextRef.current.currentTime + duration / 1000);
+      
+      oscillator.start(audioContextRef.current.currentTime);
+      oscillator.stop(audioContextRef.current.currentTime + duration / 1000);
+    } catch (error) {
+      console.warn('Audio playback failed:', error);
+    }
+  };
+
+  const playSuccessSound = (): void => {
+    vibrate([100, 50, 100, 50, 150]); // Success vibration pattern
+    playBeep(800, 100);
+    setTimeout(() => playBeep(1000, 100), 150);
+    setTimeout(() => playBeep(1200, 150), 300);
+  };
+
+  const playAchievementSound = (): void => {
+    vibrate([120, 60, 120, 60, 200]); // Grand achievement vibration
+    playBeep(900, 100);
+    setTimeout(() => playBeep(1050, 120), 140);
+    setTimeout(() => playBeep(1250, 180), 320);
+  };
+
+  // Deep celebration sound using Web Audio API as fallback
+  const playDeepCelebration = (): void => {
+    if (!audioContextRef.current || !audioInitialized) return;
+
+    try {
+      const oscillator = audioContextRef.current.createOscillator();
+      const gainNode = audioContextRef.current.createGain();
+      const filter = audioContextRef.current.createBiquadFilter();
+
+      oscillator.connect(filter);
+      filter.connect(gainNode);
+      gainNode.connect(audioContextRef.current.destination);
+
+      oscillator.frequency.value = 100; // Deep bass frequency
+      oscillator.type = 'sine';
+      
+      filter.type = 'lowpass';
+      filter.frequency.value = 200;
+      filter.Q.value = 10;
+
+      gainNode.gain.setValueAtTime(0.8, audioContextRef.current.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioContextRef.current.currentTime + 0.4);
+
+      oscillator.start(audioContextRef.current.currentTime);
+      oscillator.stop(audioContextRef.current.currentTime + 0.4);
+    } catch (error) {
+      console.warn('Deep celebration sound failed:', error);
+    }
+  };
+
+  const playCelebrationSequence = (): void => {
+    // Play success SFX first
+    playSuccessSfx();
+    
+    // Then play achievement sound
+    setTimeout(() => {
+      playAchievementSound();
+    }, 100);
+    
+    // Deep boom sound with confetti
+    setTimeout(() => {
+      // Try to play deep SFX, fallback to generated sound
+      try {
+        playDeepSfx();
+      } catch (error) {
+        playDeepCelebration();
+      }
+    }, 160);
+    
+    // Launch confetti
+    setTimeout(() => {
+      launchConfetti();
+    }, 200);
+    
+    // Enhanced vibration for deep celebration
+    setTimeout(() => {
+      vibrate([150, 100, 150, 100, 200]);
+    }, 200);
+    
+    // Show celebration state
+    setShowCelebration(true);
+    
+    // Hide celebration after 3 seconds
+    setTimeout(() => {
+      setShowCelebration(false);
+    }, 3000);
+  };
+
+  const playErrorSound = (): void => {
+    vibrate([200, 100, 200]); // Error vibration pattern
+    playBeep(400, 200);
+    setTimeout(() => playBeep(350, 200), 250);
+  };
+
+  const playScanSound = (): void => {
+    vibrate(30); // Light scan vibration
+    playBeep(1200, 100);
+    setTimeout(() => playBeep(1000, 100), 100);
+  };
+
+  const playLocationSound = (): void => {
+    vibrate(25); // GPS location vibration
+    playBeep(900, 80);
+  };
+
+  const playButtonSound = (): void => {
+    vibrate(20); // Button press vibration
+    playBeep(600, 50);
+  };
+
+  const playHoverSound = (): void => {
+    vibrate(10); // Very light hover vibration
+    playBeep(800, 30);
+  };
+
+  // Get location data from environment variables - fixed version
+  const getLocationData = (id: number): LocationData => {
+    return {
+      id,
+      name: (process.env.NEXT_PUBLIC_LOCATION_1_NAME && id === 1) ? process.env.NEXT_PUBLIC_LOCATION_1_NAME :
+            (process.env.NEXT_PUBLIC_LOCATION_2_NAME && id === 2) ? process.env.NEXT_PUBLIC_LOCATION_2_NAME :
+            (process.env.NEXT_PUBLIC_LOCATION_3_NAME && id === 3) ? process.env.NEXT_PUBLIC_LOCATION_3_NAME :
+            (process.env.NEXT_PUBLIC_LOCATION_4_NAME && id === 4) ? process.env.NEXT_PUBLIC_LOCATION_4_NAME :
+            (process.env.NEXT_PUBLIC_LOCATION_5_NAME && id === 5) ? process.env.NEXT_PUBLIC_LOCATION_5_NAME :
+            (process.env.NEXT_PUBLIC_LOCATION_6_NAME && id === 6) ? process.env.NEXT_PUBLIC_LOCATION_6_NAME :
+            (process.env.NEXT_PUBLIC_LOCATION_7_NAME && id === 7) ? process.env.NEXT_PUBLIC_LOCATION_7_NAME :
+            `Location ${id}`,
+      coordinates: {
+        lat: id === 1 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_1_LAT || '0') :
+             id === 2 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_2_LAT || '0') :
+             id === 3 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_3_LAT || '0') :
+             id === 4 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_4_LAT || '0') :
+             id === 5 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_5_LAT || '0') :
+             id === 6 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_6_LAT || '0') :
+             id === 7 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_7_LAT || '0') : 0,
+        lng: id === 1 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_1_LNG || '0') :
+             id === 2 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_2_LNG || '0') :
+             id === 3 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_3_LNG || '0') :
+             id === 4 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_4_LNG || '0') :
+             id === 5 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_5_LNG || '0') :
+             id === 6 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_6_LNG || '0') :
+             id === 7 ? parseFloat(process.env.NEXT_PUBLIC_LOCATION_7_LNG || '0') : 0
+      },
+      clue: id === 1 ? process.env.NEXT_PUBLIC_CLUE_1_TEXT || '' :
+            id === 2 ? process.env.NEXT_PUBLIC_CLUE_2_TEXT || '' :
+            id === 3 ? process.env.NEXT_PUBLIC_CLUE_3_TEXT || '' :
+            id === 4 ? process.env.NEXT_PUBLIC_CLUE_4_TEXT || '' :
+            id === 5 ? process.env.NEXT_PUBLIC_CLUE_5_TEXT || '' :
+            id === 6 ? process.env.NEXT_PUBLIC_CLUE_6_TEXT || '' :
+            id === 7 ? process.env.NEXT_PUBLIC_CLUE_7_TEXT || '' : '',
+      qrText: id === 1 ? process.env.NEXT_PUBLIC_QR_1_TEXT || '' :
+              id === 2 ? process.env.NEXT_PUBLIC_QR_2_TEXT || '' :
+              id === 3 ? process.env.NEXT_PUBLIC_QR_3_TEXT || '' :
+              id === 4 ? process.env.NEXT_PUBLIC_QR_4_TEXT || '' :
+              id === 5 ? process.env.NEXT_PUBLIC_QR_5_TEXT || '' :
+              id === 6 ? process.env.NEXT_PUBLIC_QR_6_TEXT || '' :
+              id === 7 ? process.env.NEXT_PUBLIC_QR_7_TEXT || '' : ''
+    };
+  };
+
+  // Find location by QR text - only check current clue
+  const findLocationByQRText = (qrText: string): LocationData | null => {
+    const currentLocationData = getLocationData(currentClue);
+    
+    // Only accept QR code for the current clue
+    if (currentLocationData.qrText === qrText) {
+      return currentLocationData;
+    }
+    
+    return null;
+  };
+
+  // Check if all clues are completed
+  const isGameCompleted = (): boolean => {
+    return currentClue > totalClues;
+  };
+
+  // Initialize audio on first user interaction
+  useEffect(() => {
+    const handleFirstInteraction = (): void => {
+      initializeAudio();
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+    };
+
+    document.addEventListener('click', handleFirstInteraction);
+    document.addEventListener('keydown', handleFirstInteraction);
+
+    return () => {
+      document.removeEventListener('click', handleFirstInteraction);
+      document.removeEventListener('keydown', handleFirstInteraction);
+    };
+  }, []);
 
   // Glitch effect
   useEffect(() => {
     const glitchTimer = setInterval(() => {
       setGlitchActive(true);
+      vibrate(5); // Very subtle glitch vibration
       setTimeout(() => setGlitchActive(false), 150);
     }, 6000);
 
@@ -35,6 +294,8 @@ export default function HTML5QRScanner() {
       }
 
       setLocationStatus('getting');
+      playLocationSound();
+      
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const coords = {
@@ -43,6 +304,7 @@ export default function HTML5QRScanner() {
           };
           setCurrentLocation(coords);
           setLocationStatus('success');
+          playSuccessSound();
           resolve(coords);
         },
         (error) => {
@@ -60,6 +322,7 @@ export default function HTML5QRScanner() {
           }
           setLocationError(errorMessage);
           setLocationStatus('error');
+          playErrorSound();
           reject(new Error(errorMessage));
         },
         {
@@ -84,58 +347,61 @@ export default function HTML5QRScanner() {
     return R * c * 1000; // Convert to meters
   };
 
-  // Parse QR code data to extract URL and coordinates
-  const parseQRData = (qrData: string) => {
-    try {
-      // Try to parse as JSON first
-      const parsed = JSON.parse(qrData);
-      if (parsed.url && parsed.latitude && parsed.longitude) {
-        return {
-          url: parsed.url,
-          latitude: parseFloat(parsed.latitude),
-          longitude: parseFloat(parsed.longitude),
-          tolerance: parsed.tolerance || 100 // Default 100 meters tolerance
-        };
-      }
-    } catch (e) {
-      // If not JSON, try to parse as URL with coordinates in query params
-      try {
-        const url = new URL(qrData);
-        const lat = url.searchParams.get('lat');
-        const lng = url.searchParams.get('lng');
-        const tolerance = url.searchParams.get('tolerance');
-        
-        if (lat && lng) {
-          return {
-            url: qrData,
-            latitude: parseFloat(lat),
-            longitude: parseFloat(lng),
-            tolerance: tolerance ? parseFloat(tolerance) : 100
-          };
-        }
-      } catch (e) {
-        // If it's just a regular URL, return it without coordinates
-        if (qrData.startsWith('http://') || qrData.startsWith('https://')) {
-          return { url: qrData, latitude: null, longitude: null, tolerance: null };
-        }
-      }
-    }
-    return null;
-  };
-
-  // Handle location-based URL navigation
-  const handleLocationBasedNavigation = async (qrData: string) => {
-    const parsedData = parseQRData(qrData);
+  // Handle treasure hunt QR code validation
+  const handleTreasureHuntValidation = async (qrData: string) => {
+    playScanSound();
+    setScanAttempts(0); // Reset attempts on successful scan
     
-    if (!parsedData) {
-      setData(`Invalid QR format: ${qrData}`);
+    // Check if game is already completed
+    if (isGameCompleted()) {
+      setData(`🎉 Game completed! All ${totalClues} clues found!`);
+      playSuccessSound();
+      return;
+    }
+    
+    // Find the location that matches this QR code for current clue
+    const matchedLocation = findLocationByQRText(qrData);
+    
+    if (!matchedLocation) {
+      // Check if this QR belongs to a different clue
+      let belongsToOtherClue = false;
+      for (let i = 1; i <= totalClues; i++) {
+        if (i !== currentClue) {
+          const otherLocation = getLocationData(i);
+          if (otherLocation.qrText === qrData) {
+            belongsToOtherClue = true;
+            if (i < currentClue) {
+              setData(`❌ Clue #${i} already completed. Looking for clue #${currentClue}`);
+            } else {
+              setData(`❌ Wrong clue! Complete clue #${currentClue} first`);
+            }
+            break;
+          }
+        }
+      }
+      
+      if (!belongsToOtherClue) {
+        setData(`❌ Invalid QR code. Looking for clue #${currentClue}`);
+      }
+      
+      playErrorSound();
       return;
     }
 
-    // If no coordinates in QR, just navigate to URL
-    if (parsedData.latitude === null || parsedData.longitude === null) {
-      setData(`Navigating to: ${parsedData.url}`);
-      window.open(parsedData.url, '_blank');
+    // Check if location coordinates are valid (skip GPS if coordinates are 0,0)
+    if (matchedLocation.coordinates.lat === 0 && matchedLocation.coordinates.lng === 0) {
+      // Success! Increment current clue
+      setCurrentClue(currentClue + 1);
+      setData(`✅ Clue #${currentClue} completed! "${matchedLocation.name}" unlocked!`);
+      setUnlockedLocation(matchedLocation);
+      playCelebrationSequence();
+      
+      // Check if this was the last clue
+      if (currentClue === totalClues) {
+        setTimeout(() => {
+          setData(`🎉 CONGRATULATIONS! All ${totalClues} clues completed! Game finished!`);
+        }, 2000);
+      }
       return;
     }
 
@@ -144,65 +410,149 @@ export default function HTML5QRScanner() {
       const distance = calculateDistance(
         currentPos.latitude,
         currentPos.longitude,
-        parsedData.latitude,
-        parsedData.longitude
+        matchedLocation.coordinates.lat,
+        matchedLocation.coordinates.lng
       );
 
-      if (distance <= parsedData.tolerance!) {
-        setData(`✅ Location verified! Distance: ${Math.round(distance)}m. Navigating to: ${parsedData.url}`);
-        // Navigate to the URL
-        setTimeout(() => {
-          window.open(parsedData.url, '_blank');
-        }, 1000);
+      const tolerance = 50; // 50 meters tolerance
+      
+      if (distance <= tolerance) {
+        // Success! Increment current clue
+        setCurrentClue(currentClue + 1);
+        setData(`✅ Clue #${currentClue} completed! "${matchedLocation.name}" unlocked!`);
+        setUnlockedLocation(matchedLocation);
+        playCelebrationSequence();
+        
+        // Check if this was the last clue
+        if (currentClue === totalClues) {
+          setTimeout(() => {
+            setData(`🎉 CONGRATULATIONS! All ${totalClues} clues completed! Game finished!`);
+          }, 2000);
+        }
       } else {
-        setData(`❌ Location mismatch! You are ${Math.round(distance)}m away. Required within ${parsedData.tolerance}m of target location.`);
+        setData(`❌ You're ${Math.round(distance)}m away from the location. Get closer!`);
+        playErrorSound();
       }
     } catch (error) {
       setData(`Location error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      playErrorSound();
     }
   };
 
+  // Fixed scanner initialization
   useEffect(() => {
-    const config = {
-      fps: 10,
-      qrbox: { width: 250, height: 250 },
-      aspectRatio: 1.0,
-    };
+    let scanner: Html5QrcodeScanner | null = null;
+    
+    const initializeScanner = async () => {
+      try {
+        const config = {
+          fps: 20, // Increased for better detection
+          qrbox: function(viewfinderWidth: number, viewfinderHeight: number) {
+            // Square QR box with 70% of the smaller dimension
+            const minEdgePercentage = 0.7;
+            const minEdgeSize = Math.min(viewfinderWidth, viewfinderHeight);
+            const qrboxSize = Math.floor(minEdgeSize * minEdgePercentage);
+            return {
+              width: qrboxSize,
+              height: qrboxSize
+            };
+          },
+          aspectRatio: 1.0,
+          supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA],
+          showTorchButtonIfSupported: true,
+          showZoomSliderIfSupported: true,
+          disableFlip: false,
+          rememberLastUsedCamera: true,
+          // Enhanced detection settings
+          videoConstraints: {
+            facingMode: "environment", // Use back camera
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        };
 
-    const scanner = new Html5QrcodeScanner('qr-reader', config, false);
-    scannerRef.current = scanner;
+        scanner = new Html5QrcodeScanner('qr-reader', config, false);
+        scannerRef.current = scanner;
 
-    const onScanSuccess = (decodedText: string) => {
-      console.log('QR Code scanned:', decodedText);
-      
-      // Stop scanning
-      scanner.clear();
-      setIsScanning(false);
-      
-      // Handle location-based navigation
-      handleLocationBasedNavigation(decodedText);
-    };
+        const onScanSuccess = (decodedText: string) => {
+          console.log('QR Code detected:', decodedText);
+          
+          if (scanner) {
+            scanner.clear().then(() => {
+              setIsScanning(false);
+              handleTreasureHuntValidation(decodedText);
+            }).catch(err => {
+              console.error('Error clearing scanner:', err);
+              setIsScanning(false);
+              handleTreasureHuntValidation(decodedText);
+            });
+          }
+        };
 
-    const onScanError = (errorMessage: string) => {
-      // Handle scan error - usually just means no QR code in view
-      console.log('Scan error:', errorMessage);
-    };
+        const onScanError = (errorMessage: string) => {
+          // Filter out common detection errors that are not actual problems
+          const ignoredErrors = [
+            'NotFoundException',
+            'No MultiFormat Readers',
+            'QR code parse error',
+            'Unable to detect code'
+          ];
+          
+          const shouldIgnore = ignoredErrors.some(error => 
+            errorMessage.includes(error)
+          );
+          
+          if (!shouldIgnore) {
+            console.warn('QR Scanner Error:', errorMessage);
+            // Only show user-facing errors for actual problems
+            if (errorMessage.includes('camera') || errorMessage.includes('permission')) {
+              setData(`Camera error: ${errorMessage}`);
+            }
+          } else {
+            // Track failed detection attempts
+            setScanAttempts(prev => {
+              const newAttempts = prev + 1;
+              if (newAttempts >= 100) { // After many failed attempts
+                setData('Having trouble detecting QR code. Try adjusting lighting or camera angle.');
+                return 0; // Reset counter
+              }
+              return newAttempts;
+            });
+          }
+        };
 
-    scanner.render(onScanSuccess, onScanError);
-    setIsScanning(true);
-
-    return () => {
-      if (scannerRef.current) {
-        scannerRef.current.clear().catch(console.error);
+        scanner.render(onScanSuccess, onScanError);
+        setIsScanning(true);
+        
+      } catch (error) {
+        console.error('Failed to initialize scanner:', error);
+        setData('Failed to initialize camera scanner');
       }
     };
-  }, []);
+
+    initializeScanner();
+
+    return () => {
+      if (scanner) {
+        scanner.clear().catch(console.error);
+      }
+    };
+  }, [currentClue, totalClues]);
 
   const restartScanner = () => {
-    window.location.reload();
+    playButtonSound();
+    setUnlockedLocation(null);
+    setData(`Looking for clue #${currentClue}...`);
+    setShowCelebration(false);
+    setScanAttempts(0);
+    
+    setTimeout(() => {
+      window.location.reload();
+    }, 500);
   };
 
   const getLocationManually = async () => {
+    playButtonSound();
     try {
       await getCurrentLocation();
     } catch (error) {
@@ -211,292 +561,253 @@ export default function HTML5QRScanner() {
   };
 
   return (
-    <>
-      <style jsx global>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
-        
-        .mono-font {
-          font-family: 'JetBrains Mono', 'Courier New', monospace;
-        }
-        
-        /* CRT Effects */
-        .crt-background {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: radial-gradient(circle at center, rgba(0, 255, 0, 0.03) 0%, transparent 70%);
-          pointer-events: none;
-          z-index: 1;
-        }
-        
-        .crt-scanlines {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: repeating-linear-gradient(
-            0deg,
-            transparent,
-            transparent 2px,
-            rgba(0, 255, 0, 0.03) 2px,
-            rgba(0, 255, 0, 0.03) 4px
-          );
-          pointer-events: none;
-          z-index: 2;
-        }
-        
-        .crt-vignette {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          background: radial-gradient(ellipse at center, transparent 60%, rgba(0, 0, 0, 0.4) 100%);
-          pointer-events: none;
-          z-index: 3;
-        }
-        
-        /* Grid Background */
-        .grid-bg {
-          background-image: 
-            linear-gradient(rgba(0, 255, 150, 0.1) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0, 255, 150, 0.1) 1px, transparent 1px);
-          background-size: 20px 20px;
-          animation: grid-move 20s linear infinite;
-        }
-        
-        @keyframes grid-move {
-          0% { transform: translate(0, 0); }
-          100% { transform: translate(20px, 20px); }
-        }
-        
-        /* Glitch Effect */
-        .glitch-text {
-          position: relative;
-          display: inline-block;
-        }
-        
-        .glitch-text.glitch-active::before,
-        .glitch-text.glitch-active::after {
-          content: attr(data-text);
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-        }
-        
-        .glitch-text.glitch-active::before {
-          animation: glitch-1 0.3s ease-in-out;
-          color: #ff0040;
-          z-index: -1;
-        }
-        
-        .glitch-text.glitch-active::after {
-          animation: glitch-2 0.3s ease-in-out;
-          color: #00ffff;
-          z-index: -2;
-        }
-        
-        @keyframes glitch-1 {
-          0%, 100% { transform: translate(0); }
-          20% { transform: translate(-2px, 2px); }
-          40% { transform: translate(-2px, -2px); }
-          60% { transform: translate(2px, 2px); }
-          80% { transform: translate(2px, -2px); }
-        }
-        
-        @keyframes glitch-2 {
-          0%, 100% { transform: translate(0); }
-          20% { transform: translate(2px, 2px); }
-          40% { transform: translate(2px, -2px); }
-          60% { transform: translate(-2px, 2px); }
-          80% { transform: translate(-2px, -2px); }
-        }
-        
-        /* Button Styles */
-        .button-glow {
-          border: 1px solid currentColor;
-          position: relative;
-          overflow: hidden;
-          background: transparent;
-        }
-        
-        .button-glow::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: -100%;
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-          transition: left 0.5s;
-        }
-        
-        .button-glow:hover::before {
-          left: 100%;
-        }
-        
-        .button-glow:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-        
-        /* Container Styles */
-        .scanner-container {
-          background: rgba(0, 0, 0, 0.8);
-          border: 1px solid rgba(0, 255, 150, 0.3);
-          border-radius: 8px;
-          overflow: hidden;
-        }
-        
-        .location-container {
-          background: rgba(0, 0, 0, 0.8);
-          border: 1px solid rgba(255, 165, 0, 0.3);
-          color: white;
-        }
-        
-        /* Loading Animation */
-        .loading-dots::after {
-          content: '';
-          animation: loading-dots 1.5s infinite;
-        }
-        
-        @keyframes loading-dots {
-          0% { content: ''; }
-          25% { content: '.'; }
-          50% { content: '..'; }
-          75% { content: '...'; }
-          100% { content: ''; }
-        }
-        
-        /* QR Scanner Overrides */
-        #qr-reader {
-          border: none !important;
-        }
-        
-        #qr-reader__dashboard_section {
-          background: rgba(0, 0, 0, 0.8) !important;
-          border: 1px solid rgba(0, 255, 150, 0.3) !important;
-          border-radius: 8px !important;
-          color: white !important;
-        }
-        
-        #qr-reader__dashboard_section button {
-          background: transparent !important;
-          border: 1px solid rgba(0, 255, 150, 0.5) !important;
-          color: #00ff96 !important;
-          font-family: 'JetBrains Mono', monospace !important;
-          text-transform: uppercase !important;
-          letter-spacing: 1px !important;
-          transition: all 0.3s ease !important;
-        }
-        
-        #qr-reader__dashboard_section button:hover {
-          background: rgba(0, 255, 150, 0.1) !important;
-          box-shadow: 0 0 10px rgba(0, 255, 150, 0.3) !important;
-        }
-        
-        #qr-reader__scan_region {
-          border: 2px solid rgba(0, 255, 150, 0.5) !important;
-        }
-      `}</style>
-      
-      <div className="bg-black text-white min-h-screen mono-font overflow-hidden relative">
-        {/* CRT Effects */}
-        <div className="crt-background"></div>
-        <div className="crt-scanlines"></div>
-        <div className="crt-vignette"></div>
-        <div className="grid-bg absolute inset-0 opacity-20"></div>
+    <div className="bg-black text-white min-h-screen mono-font overflow-hidden relative z-0">
+      {/* CRT Effects */}
+      <div className="crt-background"></div>
+      <div className="crt-scanlines opacity-50"></div>
+      <div className="crt-vignette"></div>
+      <div className="grid-bg absolute inset-0 opacity-20"></div>
 
-        <div className="relative z-10 flex flex-col justify-center items-center min-h-screen px-6 py-8">
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 1, ease: "easeOut" }}
-            className="text-center max-w-2xl mx-auto w-full"
-          >
-            {/* Header */}
-            <div className="mb-8">
-              <motion.h1
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.8, delay: 0.3 }}
-                className="text-4xl sm:text-5xl font-light mb-4 leading-tight"
-              >
-                <span 
-                  className={`glitch-text text-indigo-300 ${glitchActive ? 'glitch-active' : ''}`}
-                  data-text="GPS_QR_SCANNER"
-                >
-                  GPS_QR_SCANNER
-                </span>
-              </motion.h1>
-              
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.8, delay: 0.6 }}
-                className="text-lg text-cyan-400 font-light mb-6"
-              >
-                LOCATION-VERIFIED ACCESS SYSTEM
-              </motion.div>
-            </div>
+      {/* Celebration Overlay */}
+      {showCelebration && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 pointer-events-none z-50 flex items-center justify-center"
+        >
+        </motion.div>
+      )}
 
-            {/* Location Status */}
+      <div className="relative z-10 flex flex-col min-h-screen px-4 py-5 sm:px-6 lg:px-8">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 1, ease: "easeOut" }}
+          className="text-center max-w-2xl mx-auto w-full"
+        >
+          {/* Header */}
+          <div className="mb-8">
+            <motion.h1
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.8, delay: 0.3 }}
+              className="text-4xl sm:text-5xl font-light mb-4 leading-tight"
+            >
+              <span 
+                className={`glitch-text text-indigo-300 ${glitchActive ? 'glitch-active' : ''}`}
+                data-text="TREASURE_HUNT_SCANNER"
+              >
+                SCANNER
+              </span>
+            </motion.h1>
+            
             <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.8, delay: 0.6 }}
+              className="text-lg text-cyan-400 font-light mb-6"
+            >
+              LOCATION-VERIFIED ACCESS SYSTEM
+            </motion.div>
+
+            {/* Progress Indicator */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               transition={{ duration: 0.8, delay: 0.8 }}
+              className="text-sm text-orange-400 mb-4"
+            >
+              CLUE PROGRESS: {Math.max(0, currentClue - 1)} / {totalClues}
+              {!isGameCompleted() && (
+                <div className="text-xs text-gray-400 mt-1">
+                  Looking for clue #{currentClue}
+                </div>
+              )}
+            </motion.div>
+          </div>
+
+          {/* Game Completion Message */}
+          {isGameCompleted() && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="mb-6 bg-gradient-to-r from-yellow-900/40 to-orange-900/40 border border-yellow-400 rounded-lg p-6"
+            >
+              <h2 className="text-2xl text-yellow-400 font-light mb-2">🏆 GAME COMPLETED!</h2>
+              <p className="text-white">Congratulations! You've found all {totalClues} clues!</p>
+            </motion.div>
+          )}
+
+       
+          {/* Achievement Display - Grand Unlocked Location */}
+          {unlockedLocation && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{ type: 'spring', stiffness: 180, damping: 15, duration: 0.8 }}
               className="mb-6"
             >
-              <div className="relative">
-                <div className="location-container rounded-lg p-4 max-w-md mx-auto">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-orange-400 text-sm font-light tracking-wide uppercase">
-                      GPS_STATUS:
-                    </h3>
-                    <button
-                      onClick={getLocationManually}
-                      disabled={locationStatus === 'getting'}
-                      className="button-glow px-3 py-1 bg-transparent text-orange-300 text-xs font-light tracking-wider uppercase transition-all duration-300 hover:bg-orange-900/20 disabled:opacity-50"
-                    >
-                      {locationStatus === 'getting' ? 'LOCATING...' : 'GET_LOCATION'}
-                    </button>
+              <div className="bg-green-900/40 border border-green-400 shadow-lg shadow-green-400/30 rounded-lg p-6 max-w-md mx-auto relative overflow-hidden">
+                {/* Animated glow effect */}
+                <motion.div
+                  className="absolute inset-0 bg-gradient-to-r from-green-500/20 via-cyan-500/20 to-green-500/20 rounded-lg"
+                  animate={{ opacity: [0.3, 0.6, 0.3] }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                />
+                
+                {/* Celebration particles */}
+                {showCelebration && (
+                  <div className="absolute inset-0 pointer-events-none">
+                    {[...Array(12)].map((_, i) => (
+                      <motion.div
+                        key={i}
+                        className="absolute w-2 h-2 bg-yellow-400 rounded-full"
+                        style={{
+                          left: `${Math.random() * 100}%`,
+                          top: `${Math.random() * 100}%`,
+                        }}
+                        animate={{
+                          scale: [0, 1, 0],
+                          opacity: [0, 1, 0],
+                          rotate: [0, 360],
+                        }}
+                        transition={{
+                          duration: 2,
+                          delay: i * 0.1,
+                          ease: "easeOut"
+                        }}
+                      />
+                    ))}
                   </div>
+                )}
+                
+                <div className="relative z-10">
+                  <motion.h3 
+                    className="text-green-400 text-xl font-light uppercase mb-3 tracking-wider"
+                    animate={{ scale: showCelebration ? [1, 1.1, 1] : [1, 1.05, 1] }}
+                    transition={{ duration: 0.5, delay: 0.2 }}
+                  >
+                    🏆 LOCATION UNLOCKED
+                  </motion.h3>
                   
-                  {locationStatus === 'getting' && (
-                    <div className="text-yellow-400 text-xs uppercase tracking-wider">
-                      <span className="inline-block w-2 h-2 bg-yellow-400 rounded-full mr-2 animate-pulse"></span>
-                      <span className="loading-dots">ACQUIRING GPS</span>
-                    </div>
-                  )}
+                  <motion.div 
+                    className="text-white text-base mb-2 font-medium"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.4 }}
+                  >
+                    {unlockedLocation.name}
+                  </motion.div>
                   
-                  {locationStatus === 'success' && currentLocation && (
-                    <div className="text-green-400 text-xs">
-                      <div>LAT: {currentLocation.latitude.toFixed(6)}</div>
-                      <div>LNG: {currentLocation.longitude.toFixed(6)}</div>
-                    </div>
-                  )}
-                  
-                  {locationStatus === 'error' && (
-                    <div className="text-red-400 text-xs">
-                      ERROR: {locationError}
-                    </div>
-                  )}
-                  
-                  {locationStatus === 'idle' && (
-                    <div className="text-gray-400 text-xs uppercase tracking-wider">
-                      LOCATION NOT ACQUIRED
-                    </div>
+                  {unlockedLocation.clue && (
+                    <motion.div 
+                      className="text-cyan-300 text-sm italic leading-relaxed"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.6 }}
+                    >
+                      "{unlockedLocation.clue}"
+                    </motion.div>
                   )}
                 </div>
               </div>
             </motion.div>
-            
-            {/* Scanner Container */}
+          )}
+
+          {/* Status Display */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.6 }}
+            className="mb-6"
+          >
+            <div className="bg-gray-900/50 border border-gray-600 rounded-lg p-4 max-w-md mx-auto">
+              <div className="text-orange-400 text-sm uppercase tracking-wide mb-2">
+                STATUS:
+              </div>
+              <motion.div 
+                className="text-white text-xs"
+                key={data}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.3 }}
+              >
+                {data}
+              </motion.div>
+            </div>
+          </motion.div>
+
+          {/* Location Status */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 0.8 }}
+            className="mb-6"
+          >
+            <div className="relative">
+              <div className="location-container rounded-lg p-4 max-w-md mx-auto">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-orange-400 text-sm font-light tracking-wide uppercase">
+                    GPS_STATUS:
+                  </h3>
+                  <motion.button
+                    onClick={getLocationManually}
+                    onMouseEnter={playHoverSound}
+                    disabled={locationStatus === 'getting'}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    className="button-glow px-3 py-1 bg-transparent text-orange-300 text-xs font-light tracking-wider uppercase transition-all duration-300 hover:bg-orange-900/20 disabled:opacity-50"
+                  >
+                    {locationStatus === 'getting' ? 'LOCATING...' : 'GET_LOCATION'}
+                  </motion.button>
+                </div>
+                
+                {locationStatus === 'getting' && (
+                  <motion.div 
+                    className="text-yellow-400 text-xs uppercase tracking-wider"
+                    animate={{ opacity: [0.5, 1, 0.5] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  >
+                    <span className="inline-block w-2 h-2 bg-yellow-400 rounded-full mr-2 animate-pulse"></span>
+                    <span className="loading-dots">ACQUIRING GPS</span>
+                  </motion.div>
+                )}
+                
+                {locationStatus === 'success' && currentLocation && (
+                  <motion.div 
+                    className="text-green-400 text-xs"
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.5 }}
+                  >
+                    <div>LAT: {currentLocation.latitude.toFixed(6)}</div>
+                    <div>LNG: {currentLocation.longitude.toFixed(6)}</div>
+                  </motion.div>
+                )}
+                
+                {locationStatus === 'error' && (
+                  <motion.div 
+                    className="text-red-400 text-xs"
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    ERROR: {locationError}
+                  </motion.div>
+                )}
+                
+                {locationStatus === 'idle' && (
+                  <div className="text-gray-400 text-xs uppercase tracking-wider">
+                    LOCATION NOT ACQUIRED
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+          
+          {/* Scanner Container */}
+          {!isGameCompleted() && (
             <motion.div
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -510,50 +821,51 @@ export default function HTML5QRScanner() {
                 ></div>
               </div>
             </motion.div>
+          )}
 
-            {/* Controls */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.8, delay: 1.2 }}
-              className="mb-6"
+          {/* Controls */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.8, delay: 1.2 }}
+            className="mb-6"
+          >
+            <motion.button
+              onClick={restartScanner}
+              onMouseEnter={playHoverSound}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              className="button-glow px-6 py-3 bg-transparent text-indigo-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-indigo-900/20"
             >
-              <button
-                onClick={restartScanner}
-                className="button-glow px-6 py-3 bg-transparent text-indigo-300 text-sm font-light tracking-wider uppercase transition-all duration-300 hover:bg-indigo-900/20"
-              >
-                RESTART_SCANNER
-              </button>
-            </motion.div>
+              RESTART_SCANNER
+            </motion.button>
           </motion.div>
-        </div>
-        
-        {/* Floating Animation Elements */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          {[...Array(6)].map((_, i) => (
-            <motion.div
-              key={i}
-              className="absolute w-px h-12 bg-gradient-to-b from-transparent via-green-400 to-transparent opacity-20"
-              style={{
-                left: `${15 + i * 15}%`,
-                top: `${Math.random() * 100}%`,
-              }}
-              animate={{
-                y: [0, -150, 0],
-                opacity: [0, 0.4, 0],
-              }}
-              transition={{
-                duration: 10 + Math.random() * 5,
-                repeat: Infinity,
-                delay: Math.random() * 4,
-                ease: "easeInOut",
-              }}
-            />
-          ))}
-        </div>
-        
-  
+        </motion.div>
       </div>
-    </>
+      
+      {/* Floating Animation Elements */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        {[...Array(6)].map((_, i) => (
+          <motion.div
+            key={i}
+            className="absolute w-px h-12 bg-gradient-to-b from-transparent via-green-400 to-transparent opacity-20"
+            style={{
+              left: `${15 + i * 15}%`,
+              top: `${Math.random() * 100}%`,
+            }}
+            animate={{
+              y: [0, -150, 0],
+              opacity: [0, 0.4, 0],
+            }}
+            transition={{
+              duration: 10 + Math.random() * 5,
+              repeat: Infinity,
+              delay: Math.random() * 4,
+              ease: "easeInOut",
+            }}
+          />
+        ))}
+      </div>
+    </div>
   );
 }

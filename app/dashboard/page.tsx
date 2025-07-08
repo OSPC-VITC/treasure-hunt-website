@@ -12,6 +12,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import QRScanner from '@/components/QrPage';
+import HomeContent from '@/components/home';
 
 interface Activity {
   action: string;
@@ -32,9 +33,14 @@ interface TabItem {
 }
 
 interface TeamMember {
-  id: string;
   name: string;
-  email: string;
+  rollno: string;
+}
+
+interface TeamResponse {
+  team_name: string;
+  members: TeamMember[];
+  error?: string; 
 }
 
 export default function TreasureHuntDashboard(): JSX.Element {
@@ -43,32 +49,45 @@ export default function TreasureHuntDashboard(): JSX.Element {
   const [glitchActive, setGlitchActive] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>('home');
   const [audioInitialized, setAudioInitialized] = useState<boolean>(false);
-  const [currentClue, setCurrentClue] = useState<number>(1);
-  const [teamScore, setTeamScore] = useState<number>(150);
-  const [completedClues, setCompletedClues] = useState<number>(3);
-  const [totalClues] = useState<number>(10);
+  
+  // Team members state
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const backgroundMusicRef = useRef<HTMLAudioElement | null>(null);
 
-  // Dummy team members data (max 3)
-  const teamMembers: TeamMember[] = [
-    {
-      id: '1',
-      name: 'Mithil',
-      email: 'your@email.com',
-    },
-    {
-      id: '2',
-      name: 'Vaibhav',
-      email: 'your@email.com',
-    },
-    {
-      id: '3',
-      name: 'Pranav',
-      email: 'your@email.com',
+  // Fetch team members from API
+  const fetchTeamMembers = async (): Promise<void> => {
+    if (!user) return;
+    
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/team-members');
+      const data: TeamResponse = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch team members');
+      }
+
+      setTeamMembers(data.members);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+      console.error('Error fetching team members:', err);
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
+
+  // Fetch team members when user is loaded
+  useEffect(() => {
+    if (isLoaded && user) {
+      fetchTeamMembers();
+    }
+  }, [isLoaded, user]);
 
   // Vibration/Haptic feedback function
   const vibrate = (pattern: number | number[] = 50): void => {
@@ -285,104 +304,8 @@ export default function TreasureHuntDashboard(): JSX.Element {
         
         <div className="flex items-center space-x-4">
           <div className="text-right">
-            <div className="text-sm font-mono text-cyan-400">{teamScore} pts</div>
+            <div className="text-sm font-mono text-cyan-400">Team Name:</div>
             <div className="text-xs text-gray-400">{getTeamName()}</div>
-          </div>
-        </div>
-      </div>
-    </motion.div>
-  );
-
-  // Home Tab Content
-  const HomeContent: React.FC = () => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className="space-y-4"
-    >
-      {/* Progress Overview */}
-      <div className="relative bg-black/80 backdrop-blur-sm rounded-lg border border-green-400/30 p-4">
-        <div className="absolute inset-0 bg-gradient-to-r from-green-500/10 via-cyan-500/10 to-indigo-500/10 rounded-lg blur-xl"></div>
-        <div className="relative">
-          <h2 className="text-lg font-light mb-3 text-green-400 tracking-wide uppercase">
-            Mission Status
-          </h2>
-          
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-cyan-400 mb-1">{completedClues}</div>
-              <div className="text-xs text-gray-400 uppercase tracking-wider">Clues Found</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-indigo-400 mb-1">{teamScore}</div>
-              <div className="text-xs text-gray-400 uppercase tracking-wider">Points</div>
-            </div>
-          </div>
-          
-          {/* Progress Bar */}
-          <div className="mb-4">
-            <div className="flex justify-between text-xs text-gray-400 mb-2">
-              <span>Progress</span>
-              <span>{Math.round((completedClues / totalClues) * 100)}%</span>
-            </div>
-            <div className="w-full bg-gray-800 rounded-full h-2">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${(completedClues / totalClues) * 100}%` }}
-                transition={{ duration: 1, delay: 0.5 }}
-                className="bg-gradient-to-r from-green-400 to-cyan-400 h-2 rounded-full"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Current Clue */}
-      <div className="relative bg-black/80 backdrop-blur-sm rounded-lg border border-cyan-400/30 p-4">
-        <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/10 via-indigo-500/10 to-green-500/10 rounded-lg blur-xl"></div>
-        <div className="relative">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base font-light text-cyan-400 tracking-wide uppercase">
-              Current Clue #{currentClue}
-            </h3>
-            <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
-          </div>
-          
-          <p className="text-gray-300 text-sm mb-3 font-light leading-relaxed">
-            "In the realm where knowledge flows like digital streams, seek the guardian of ancient wisdom. 
-            Where books meet bytes, your next key awaits."
-          </p>
-          
-          <div className="flex items-center text-xs text-gray-400">
-            <span className="mr-4">DIFFICULTY: MEDIUM</span>
-            <span>POINTS: 50</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Activity */}
-      <div className="relative bg-black/80 backdrop-blur-sm rounded-lg border border-indigo-400/30 p-4">
-        <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 via-green-500/10 to-cyan-500/10 rounded-lg blur-xl"></div>
-        <div className="relative">
-          <h3 className="text-base font-light text-indigo-400 tracking-wide uppercase mb-3">
-            Recent Activity
-          </h3>
-          
-          <div className="space-y-2">
-            {[
-              { action: 'Clue #3 Completed', time: '2 min ago', points: '+30' },
-              { action: 'QR Code Scanned', time: '5 min ago', points: '+10' },
-              { action: 'Clue #2 Completed', time: '12 min ago', points: '+25' },
-            ].map((activity: Activity, index: number) => (
-              <div key={index} className="flex items-center justify-between py-2 border-b border-gray-700/50 last:border-b-0">
-                <div>
-                  <div className="text-sm text-gray-300">{activity.action}</div>
-                  <div className="text-xs text-gray-500">{activity.time}</div>
-                </div>
-                <div className="text-green-400 text-sm font-mono">{activity.points}</div>
-              </div>
-            ))}
           </div>
         </div>
       </div>
@@ -433,25 +356,46 @@ export default function TreasureHuntDashboard(): JSX.Element {
         <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/10 via-indigo-500/10 to-green-500/10 rounded-lg blur-xl"></div>
         <div className="relative">
           <h3 className="text-base font-light text-cyan-400 tracking-wide uppercase mb-3">
-            Team Members ({teamMembers.length}/3)
+            Team Members ({teamMembers.length})
           </h3>
           
-          <div className="space-y-3">
-            {teamMembers.map((member: TeamMember, index: number) => (
-              <div key={member.id} className="flex items-center py-2 border-b border-gray-700/50 last:border-b-0">
-                <div className="flex items-center space-x-3 flex-1">
-                  <div className="relative">
-                    <div className="w-8 h-8 bg-gradient-to-r from-green-400 to-cyan-400 rounded-full flex items-center justify-center">
-                      <span className="text-xs font-bold text-black">{getMemberInitials(member.name)}</span>
+          {loading ? (
+            <div className="flex items-center justify-center py-4">
+              <div className="text-sm text-gray-400">Loading team members...</div>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center py-4 space-y-2">
+              <div className="text-sm text-red-400">Error: {error}</div>
+              <button
+                onClick={fetchTeamMembers}
+                className="px-3 py-1 bg-cyan-900/20 hover:bg-cyan-900/30 border border-cyan-400/30 hover:border-cyan-400/50 rounded text-xs text-cyan-400 transition-all duration-300"
+              >
+                Retry
+              </button>
+            </div>
+          ) : teamMembers.length === 0 ? (
+            <div className="flex items-center justify-center py-4">
+              <div className="text-sm text-gray-400">No team members found</div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {teamMembers.map((member: TeamMember, index: number) => (
+                <div key={`${member.name}-${index}`} className="flex items-center py-2 border-b border-gray-700/50 last:border-b-0">
+                  <div className="flex items-center space-x-3 flex-1">
+                    <div className="relative">
+                      <div className="w-8 h-8 bg-gradient-to-r from-green-400 to-cyan-400 rounded-full flex items-center justify-center">
+                        <span className="text-xs font-bold text-black">{getMemberInitials(member.name)}</span>
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm text-gray-300 font-medium">{member.name}</div>
+                      <div className="text-xs text-gray-500">Roll No: {member.rollno}</div>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-sm text-gray-300">{member.name}</div>
-                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

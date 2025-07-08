@@ -10,11 +10,12 @@ const isPublicRoute = createRouteMatcher([
 export default clerkMiddleware(async (auth, req) => {
   const { userId } = await auth();
   const { pathname } = req.nextUrl;
+  const origin = req.headers.get('origin') || req.nextUrl.origin;
 
   // If user is not authenticated
   if (!userId) {
-    // Allow access to the home page, auth pages, and audio files
-    if (pathname === '/' || pathname.startsWith('/sign-in') || pathname.startsWith('/audio') || pathname.startsWith('/manifest.json')) {
+    // Allow access to public routes
+    if (isPublicRoute(req) || pathname.startsWith('/audio') || pathname.startsWith('/manifest.json')) {
       return NextResponse.next();
     }
     
@@ -23,7 +24,17 @@ export default clerkMiddleware(async (auth, req) => {
     return NextResponse.redirect(signInUrl);
   }
 
-  // If user is authenticated, allow access to all routes
+  // Domain validation for authenticated users
+  const allowedOrigins = [
+    'https://www.treasurehunt.ospcvitc.club',
+    'http://localhost:3000'
+  ];
+
+  if (!allowedOrigins.includes(origin)) {
+    return new NextResponse('Forbidden - Invalid origin', { status: 403 });
+  }
+
+  // If user is authenticated and from allowed origin, allow access to all routes
   return NextResponse.next();
 });
 

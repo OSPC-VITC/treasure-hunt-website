@@ -287,3 +287,39 @@ body {
           backdrop-filter: blur(0.2px);
           filter: drop-shadow(0 0 3px rgba(0, 255, 0, 0.1));
         }
+
+
+
+
+  /* QR Scanner Overrides */
+        #qr-reader {
+          border: none !important;
+        }
+        
+        #qr-reader__dashboard_section {
+          background: rgba(0, 0, 0, 0.8) !important;
+          border: 1px solid rgba(0, 255, 150, 0.3) !important;
+          border-radius: 8px !important;
+          color: white !important;
+        }
+        
+        #qr-reader__dashboard_section button {
+          background: transparent !important;
+          border: 1px solid rgba(0, 255, 150, 0.5) !important;
+          color: #00ff96 !important;
+          font-family: 'JetBrains Mono', monospace !important;
+          text-transform: uppercase !important;
+          letter-spacing: 1px !important;
+          transition: all 0.3s ease !important;
+        }
+        
+        #qr-reader__dashboard_section button:hover {
+          background: rgba(0, 255, 150, 0.1) !important;
+          box-shadow: 0 0 10px rgba(0, 255, 150, 0.3) !important;
+        }
+        
+        #qr-reader__scan_region {
+          border: 2px solid rgba(0, 255, 150, 0.5) !important;
+        }
+
+        

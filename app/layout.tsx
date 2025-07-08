@@ -3,6 +3,8 @@ import { Geist, Geist_Mono, JetBrains_Mono } from "next/font/google";
 import {
   ClerkProvider,
 } from '@clerk/nextjs'
+import { Provider as JotaiProvider } from 'jotai';
+
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,12 +35,16 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider>
+          <JotaiProvider>
+
       <html lang="en">
         <link rel="manifest" href="/manifest.json" />
         <body className={`${geistSans.variable} ${geistMono.variable} ${jetbrainsMono.variable} antialiased`}>
           {children}
         </body>
       </html>
+          </JotaiProvider>
+
     </ClerkProvider>
   )
 }
